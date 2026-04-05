@@ -9,7 +9,7 @@ name: label-studio
 services:
   label-studio:
     ports:
-      - "8080:8080"
+      - "8085:8080"
     environment:
       - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=false
       - DJANGO_LOG_LEVEL=DEBUG
@@ -17,8 +17,8 @@ services:
 
   minio:
     ports:
-      - "9000:9000"   # API (S3 endpoint)
-      - "9001:9001"   # MinIO Console UI
+      - "19000:9000"   # API (S3 endpoint)
+      - "19001:9001"   # MinIO Console UI
 
   db:
     ports:
@@ -30,4 +30,4 @@ services:
 
   nginx:
     ports:
-      - "80:80"
+      - "8090:80"

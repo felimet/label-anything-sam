@@ -84,10 +84,10 @@ sequenceDiagram
 
 | 服務 | 主機埠號 |
 |------|----------|
-| nginx | 80 |
-| label-studio | 8080 |
-| minio API | 9000 |
-| minio console | 9001 |
+| nginx | 8090 |
+| label-studio | 8085 |
+| minio API | 19000 |
+| minio console | 19001 |
 | postgres | 5433 |
 | redis | 6380 |
 
