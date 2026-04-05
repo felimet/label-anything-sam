@@ -1,0 +1,57 @@
+name: label-studio
+
+# ============================================================
+# GPU Overlay — SAM3 ML Backend
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# Requires: NVIDIA Container Toolkit
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+# ============================================================
+
+services:
+  sam3-ml-backend:
+    build:
+      context: ./sam3-ml-backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Label Studio connection
+      LABEL_STUDIO_URL: http://label-studio:8080
+      LABEL_STUDIO_API_KEY: ${LABEL_STUDIO_API_KEY}
+
+      # Model
+      HF_TOKEN: ${HF_TOKEN}
+      SAM3_MODEL_ID: ${SAM3_MODEL_ID:-facebook/sam3}
+      DEVICE: ${DEVICE:-cuda}
+
+      # Cache
+      EMBED_CACHE_SIZE: ${EMBED_CACHE_SIZE:-50}
+      EMBED_CACHE_TTL: ${EMBED_CACHE_TTL:-300}
+
+      # Server
+      PORT: "9090"
+      WORKERS: "1"
+      THREADS: "8"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      # Allow time for model download on first start
+      start_period: 300s
+    depends_on:
+      label-studio:
+        condition: service_healthy
+    networks:
+      - internal

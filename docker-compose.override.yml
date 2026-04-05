@@ -1,0 +1,33 @@
+name: label-studio
+
+# ============================================================
+# Local Development Override
+# Exposes ports directly; disables strict signup; enables CPU mode.
+# This file is auto-loaded by `docker compose up` alongside docker-compose.yml.
+# ============================================================
+
+services:
+  label-studio:
+    ports:
+      - "8080:8080"
+    environment:
+      LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK: "false"
+      DJANGO_LOG_LEVEL: DEBUG
+      LOG_LEVEL: DEBUG
+
+  minio:
+    ports:
+      - "9000:9000"   # API (S3 endpoint)
+      - "9001:9001"   # MinIO Console UI
+
+  db:
+    ports:
+      - "5433:5432"   # Avoid conflict with local PostgreSQL
+
+  redis:
+    ports:
+      - "6380:6379"   # Avoid conflict with local Redis
+
+  nginx:
+    ports:
+      - "80:80"
