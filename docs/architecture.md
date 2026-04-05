@@ -33,7 +33,7 @@ graph LR
     DB[db<br/>healthy]
     Redis[redis<br/>healthy]
     Minio[minio<br/>healthy]
-    MinioInit[minio-init<br/>完成]
+    MinioInit[minio-init<br/>手動 make init-minio]
     LS[label-studio<br/>healthy]
     SAM3[sam3-ml-backend<br/>GPU overlay]
     Nginx[nginx]
@@ -41,8 +41,8 @@ graph LR
 
     DB --> LS
     Redis --> LS
-    Minio --> MinioInit
-    MinioInit --> LS
+    Minio --> LS
+    Minio -.-> MinioInit
     LS --> SAM3
     LS --> Nginx
     Nginx --> CF
@@ -68,13 +68,13 @@ sequenceDiagram
 
 ## Docker Volumes
 
-| Volume | 掛載服務 | 內容 |
-|--------|----------|------|
-| `postgres-data` | db | PostgreSQL 資料檔 |
-| `redis-data` | redis | Redis AOF / RDB |
-| `minio-data` | minio | 物件儲存資料 |
-| `label-studio-data` | label-studio | 媒體檔、匯出、上傳 |
-| `hf-cache` | sam3-ml-backend | HuggingFace 模型權重快取 |
+| Volume / 路徑 | 類型 | 掛載服務 | 內容 |
+|---------------|------|----------|------|
+| `postgres-data` | named volume | db | PostgreSQL 資料檔 |
+| `redis-data` | named volume | redis | Redis AOF / RDB |
+| `minio-data` | named volume | minio | 物件儲存資料 |
+| `./label-studio-data` | bind mount | label-studio | 媒體檔、匯出、上傳；host 端可直接觀察 |
+| `hf-cache` | named volume | sam3-ml-backend | HuggingFace 模型權重快取 |
 
 ## 內部網路
 

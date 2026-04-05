@@ -29,6 +29,8 @@ make test-sam3       # 在執行中容器內執行 pytest
 4. 點選 **Validate and Save**
 5. 在標注頁面開啟 **Auto-Annotation** 切換
 
+> **API Key 設定**：`LABEL_STUDIO_USER_TOKEN` 為首次啟動時自動寫入的 admin bootstrap token；`LABEL_STUDIO_API_KEY` 為 sam3-ml-backend 專用的存取金鑰，建議在 LS UI（Settings → Access Tokens）建立獨立 token 後填入 `.env`。詳見 [docs/configuration.md](configuration.md#label-studio-user_token-注意事項)。
+
 ## 標注配置
 
 將 [sam3-ml-backend/labeling_config.xml](../sam3-ml-backend/labeling_config.xml) 匯入專案：

@@ -11,9 +11,9 @@ services:
     ports:
       - "8080:8080"
     environment:
-      LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK: "false"
-      DJANGO_LOG_LEVEL: DEBUG
-      LOG_LEVEL: DEBUG
+      - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=false
+      - DJANGO_LOG_LEVEL=DEBUG
+      - LOG_LEVEL=DEBUG
 
   minio:
     ports:

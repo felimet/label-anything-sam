@@ -17,13 +17,13 @@ x-logging: &default-logging
 services:
   # ── PostgreSQL ──────────────────────────────────────────────
   db:
-    image: postgres:15-alpine
+    image: "postgres:${POSTGRES_VERSION:-15.17-alpine3.21}"
     restart: unless-stopped
     logging: *default-logging
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-labelstudio}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-labelstudio}
+      - POSTGRES_USER=${POSTGRES_USER:-labelstudio}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-labelstudio}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
@@ -38,7 +38,7 @@ services:
 
   # ── Redis ───────────────────────────────────────────────────
   redis:
-    image: redis:7-alpine
+    image: "redis:${REDIS_VERSION:-7.4.5-alpine3.21}"
     restart: unless-stopped
     logging: *default-logging
     command: >
@@ -58,16 +58,18 @@ services:
 
   # ── MinIO ───────────────────────────────────────────────────
   minio:
-    image: minio/minio:latest
+    # WARNING: minio/minio repo archived 2026-02-13. No future updates.
+    # NOTE: RELEASE.2025-10-15T17-29-55Z is a CVE fix; upgrade if security is a concern.
+    image: "minio/minio:${MINIO_VERSION:-RELEASE.2025-10-15T17-29-55Z}"
     restart: unless-stopped
     logging: *default-logging
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       # External domain — presigned URLs will use this base
-      MINIO_SERVER_URL: https://${MINIO_EXTERNAL_HOST:-minio.example.com}
-      MINIO_BROWSER_REDIRECT_URL: https://${MINIO_EXTERNAL_HOST:-minio.example.com}/ui/
+      - MINIO_SERVER_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}
+      - MINIO_BROWSER_REDIRECT_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}/ui/
     volumes:
       - minio-data:/data
     healthcheck:
@@ -81,15 +83,15 @@ services:
 
   # ── MinIO Init (one-shot bucket + CORS setup) ───────────────
   minio-init:
-    image: minio/mc:latest
+    image: "minio/mc:${MC_VERSION:-RELEASE.2025-08-13T08-35-41Z}"
     restart: "no"
     depends_on:
       minio:
         condition: service_healthy
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET: ${MINIO_BUCKET:-label-studio-bucket}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_BUCKET=${MINIO_BUCKET:-label-studio-bucket}
     volumes:
       - ./scripts:/scripts:ro
     entrypoint: ["/bin/sh", "/scripts/init-minio.sh"]
@@ -98,7 +100,7 @@ services:
 
   # ── Label Studio ────────────────────────────────────────────
   label-studio:
-    image: heartexlabs/label-studio:latest
+    image: "heartexlabs/label-studio:${LABEL_STUDIO_VERSION:-20260404.151117-fb-bros-956-f3692362}"
     restart: unless-stopped
     logging: *default-logging
     depends_on:
@@ -111,43 +113,45 @@ services:
     user: "1001:1001"
     environment:
       # Database
-      DJANGO_DB: default
-      POSTGRESDB_HOST: db
-      POSTGRESDB_PORT: "5432"
-      POSTGRESDB_NAME: ${POSTGRES_DB:-labelstudio}
-      POSTGRESDB_USER: ${POSTGRES_USER:-labelstudio}
-      POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
-
+      - DJANGO_DB=default
+      - POSTGRESDB_HOST=db
+      - POSTGRESDB_PORT=5432
+      - POSTGRESDB_NAME=${POSTGRES_DB:-labelstudio}
+      - POSTGRESDB_USER=${POSTGRES_USER:-labelstudio}
+      - POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
       # Redis (task queue + caching)
-      REDIS_LOCATION: redis://:${REDIS_PASSWORD}@redis:6379/1
-
+      - REDIS_LOCATION=redis://:${REDIS_PASSWORD}@redis:6379/1
       # Django
-      SECRET_KEY: ${LABEL_STUDIO_SECRET_KEY}
-      LABEL_STUDIO_HOST: ${LABEL_STUDIO_HOST}
-
+      - SECRET_KEY=${LABEL_STUDIO_SECRET_KEY}
+      - LABEL_STUDIO_HOST=${LABEL_STUDIO_HOST}
       # Cloudflare Tunnel forwards real IP/host via headers
-      USE_X_FORWARDED_HOST: "true"
-      USE_X_FORWARDED_PORT: "true"
+      - USE_X_FORWARDED_HOST=true
+      - USE_X_FORWARDED_PORT=true
       # Trust CF Tunnel's forwarded headers
-      DJANGO_CSRF_TRUSTED_ORIGINS: ${LABEL_STUDIO_HOST}
-
+      - DJANGO_CSRF_TRUSTED_ORIGINS=${LABEL_STUDIO_HOST}
       # Storage — disable SSRF protection for internal MinIO calls
-      SSRF_PROTECTION_ENABLED: "false"
-      LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED: "true"
-      LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT: /home/user
-
+      - SSRF_PROTECTION_ENABLED=false
+      - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
+      - LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=${LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT:-/label-studio/data/file}
+      # Bulk upload — Django default (100) breaks large task imports
+      # Ref: HumanSignal/label-studio#6777
+      - DATA_UPLOAD_MAX_NUMBER_FILES=100000
+      # Structured JSON logs (undocumented in guide but honoured by LS source)
+      - JSON_LOG=1
+      # Bootstrap a deterministic legacy API token on first boot.
+      # NOTE: only takes effect on FIRST startup against an empty Postgres DB.
+      - LABEL_STUDIO_USER_TOKEN=${LABEL_STUDIO_USER_TOKEN}
+      - LABEL_STUDIO_ENABLE_LEGACY_API_TOKEN=true
       # Security
-      LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK: ${LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK:-true}
-
+      - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=${LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK:-true}
       # Initial admin (only used on first run)
-      DEFAULT_USERNAME: ${LABEL_STUDIO_USERNAME:-admin@example.com}
-      DEFAULT_USER_PASSWORD: ${LABEL_STUDIO_PASSWORD}
-
+      - DEFAULT_USERNAME=${LABEL_STUDIO_USERNAME:-admin@example.com}
+      - DEFAULT_USER_PASSWORD=${LABEL_STUDIO_PASSWORD}
       # Logging
-      DJANGO_LOG_LEVEL: WARNING
-      LOG_LEVEL: WARNING
+      - DJANGO_LOG_LEVEL=WARNING
+      - LOG_LEVEL=WARNING
     volumes:
-      - label-studio-data:/label-studio/data
+      - ./label-studio-data:/label-studio/data
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
@@ -159,7 +163,7 @@ services:
 
   # ── Nginx (reverse proxy) ───────────────────────────────────
   nginx:
-    image: nginx:1.27-alpine
+    image: "nginx:${NGINX_VERSION:-1.28.3-alpine3.23}"
     restart: unless-stopped
     logging: *default-logging
     depends_on:
@@ -181,7 +185,7 @@ services:
   #   label-studio.example.com → http://nginx:80
   #   minio.example.com        → http://minio:9000
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: "cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.3.0}"
     restart: unless-stopped
     logging: *default-logging
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
@@ -197,7 +201,6 @@ volumes:
   postgres-data:
   redis-data:
   minio-data:
-  label-studio-data:
   hf-cache:
 
 networks:

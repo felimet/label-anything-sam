@@ -8,13 +8,16 @@ Production-ready [Label Studio](https://labelstud.io) stack: PostgreSQL · Redis
 
 | Service | Image | Role |
 |---------|-------|------|
-| `label-studio` | heartexlabs/label-studio:latest | Labeling UI + API |
-| `db` | postgres:15-alpine | Metadata store |
-| `redis` | redis:7-alpine | Task queue / cache |
-| `minio` | minio/minio:latest | S3-compatible object storage |
-| `nginx` | nginx:1.27-alpine | Reverse proxy |
-| `cloudflared` | cloudflare/cloudflared:latest | Zero Trust tunnel |
+| `label-studio` | `heartexlabs/label-studio:20260404.151117-fb-bros-956-f3692362` | Labeling UI + API |
+| `db` | `postgres:15.17-alpine3.21` | Metadata store |
+| `redis` | `redis:7.4.5-alpine3.21` | Task queue / cache |
+| `minio` | `minio/minio:RELEASE.2025-10-15T17-29-55Z` ⚠️ | S3-compatible object storage |
+| `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | One-shot bucket + CORS setup |
+| `nginx` | `nginx:1.28.3-alpine3.23` | Reverse proxy |
+| `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust tunnel |
 | `sam3-ml-backend` | (custom build) | SAM3 interactive segmentation *(GPU, optional)* |
+
+> ⚠️ `minio/minio` repository archived 2026-02-13. `RELEASE.2025-10-15T17-29-55Z` is the final release (CVE fix). Evaluate migration to Cloudflare R2 / AWS S3 for long-term use.
 
 ## Prerequisites
 
@@ -30,10 +33,11 @@ git clone https://github.com/felimet/label-studio-compose
 cd label-studio-compose
 cp .env.example .env
 $EDITOR .env           # fill every <PLACEHOLDER>
+                       # set LABEL_STUDIO_USER_TOKEN=<openssl rand -hex 32>
+                       # set LABEL_STUDIO_API_KEY separately (dedicated service token)
 
-make up                # start core stack
+make up                # start core stack (admin account auto-created on first boot)
 make init-minio        # create S3 bucket + policies
-make create-admin      # create first superuser
 
 make gpu               # (optional) start SAM3 ML backend on GPU
 ```

@@ -17,23 +17,20 @@ services:
     restart: unless-stopped
     environment:
       # Label Studio connection
-      LABEL_STUDIO_URL: http://label-studio:8080
-      LABEL_STUDIO_API_KEY: ${LABEL_STUDIO_API_KEY}
-
+      - LABEL_STUDIO_URL=http://label-studio:8080
+      - LABEL_STUDIO_API_KEY=${LABEL_STUDIO_API_KEY}
       # Model
-      HF_TOKEN: ${HF_TOKEN}
-      SAM3_MODEL_ID: ${SAM3_MODEL_ID:-facebook/sam3}
-      DEVICE: ${DEVICE:-cuda}
-
+      - HF_TOKEN=${HF_TOKEN}
+      - SAM3_MODEL_ID=${SAM3_MODEL_ID:-facebook/sam3}
+      - DEVICE=${DEVICE:-cuda}
       # Cache
-      EMBED_CACHE_SIZE: ${EMBED_CACHE_SIZE:-50}
-      EMBED_CACHE_TTL: ${EMBED_CACHE_TTL:-300}
-
+      - EMBED_CACHE_SIZE=${EMBED_CACHE_SIZE:-50}
+      - EMBED_CACHE_TTL=${EMBED_CACHE_TTL:-300}
       # Server
-      PORT: "9090"
-      WORKERS: "1"
-      THREADS: "8"
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      - PORT=9090
+      - WORKERS=1
+      - THREADS=8
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - hf-cache:/root/.cache/huggingface
     deploy:

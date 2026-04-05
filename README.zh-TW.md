@@ -8,13 +8,16 @@
 
 | 服務 | 映像 | 用途 |
 |------|------|------|
-| `label-studio` | heartexlabs/label-studio:latest | 標注 UI + API |
-| `db` | postgres:15-alpine | 資料庫 |
-| `redis` | redis:7-alpine | 任務佇列 / 快取 |
-| `minio` | minio/minio:latest | S3 相容物件儲存 |
-| `nginx` | nginx:1.27-alpine | 反向代理 |
-| `cloudflared` | cloudflare/cloudflared:latest | Zero Trust Tunnel |
+| `label-studio` | `heartexlabs/label-studio:20260404.151117-fb-bros-956-f3692362` | 標注 UI + API |
+| `db` | `postgres:15.17-alpine3.21` | 資料庫 |
+| `redis` | `redis:7.4.5-alpine3.21` | 任務佇列 / 快取 |
+| `minio` | `minio/minio:RELEASE.2025-10-15T17-29-55Z` ⚠️ | S3 相容物件儲存 |
+| `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | 一次性 bucket + CORS 初始化 |
+| `nginx` | `nginx:1.28.3-alpine3.23` | 反向代理 |
+| `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust Tunnel |
 | `sam3-ml-backend` | (自訂建置) | SAM3 互動分割 *(需 GPU，可選)* |
+
+> ⚠️ `minio/minio` 儲存庫已於 2026-02-13 封存，不再更新。`RELEASE.2025-10-15T17-29-55Z` 為最終版本（CVE 安全修補）。長期使用建議評估遷移至 Cloudflare R2 或 AWS S3。
 
 ## 前置需求
 
@@ -30,10 +33,11 @@ git clone https://github.com/felimet/label-studio-compose
 cd label-studio-compose
 cp .env.example .env
 $EDITOR .env           # 填入所有 <PLACEHOLDER> 值
+                       # 設定 LABEL_STUDIO_USER_TOKEN=$(openssl rand -hex 32)
+                       # 設定 LABEL_STUDIO_API_KEY（專用的 sam3 服務 token，與 USER_TOKEN 分開）
 
-make up                # 啟動核心服務
+make up                # 啟動核心服務（管理員帳號於首次啟動時自動建立）
 make init-minio        # 建立 S3 儲存桶 + 存取政策
-make create-admin      # 建立第一位管理員
 
 make gpu               # （可選）啟動 SAM3 GPU ML 後端
 ```
