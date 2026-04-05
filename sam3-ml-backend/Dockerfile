@@ -28,7 +28,11 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
 WORKDIR /build
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Step 1: PyTorch CUDA wheels (--index-url replaces PyPI, so torch/torchvision only)
+RUN pip3 install --no-cache-dir torch torchvision \
+    --index-url https://download.pytorch.org/whl/cu128
+# Step 2: Remaining packages from PyPI (torch already installed → skipped)
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # ── Stage 2: runtime ─────────────────────────────────────────
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04

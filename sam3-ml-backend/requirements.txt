@@ -1,9 +1,6 @@
-# ── PyTorch (CUDA 12.8 wheel) ────────────────────────────────
-# Without GPU (CI/local dev): change index-url to
-#   https://download.pytorch.org/whl/cpu
---index-url https://download.pytorch.org/whl/cu128
-torch>=2.4.0,<2.8.0
-torchvision>=0.19.0
+# ── PyTorch ───────────────────────────────────────────────────
+# Installed separately in Dockerfile via --index-url https://download.pytorch.org/whl/cu128
+# to guarantee CUDA builds. Not listed here to avoid version constraint conflicts.
 
 # ── HuggingFace ──────────────────────────────────────────────
 # Pin to a version that includes Sam3TrackerModel / Sam3TrackerProcessor.
