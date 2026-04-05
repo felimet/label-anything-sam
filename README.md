@@ -9,9 +9,9 @@ Production-ready [Label Studio](https://labelstud.io) stack: PostgreSQL · Redis
 | Service | Image | Role |
 |---------|-------|------|
 | `label-studio` | `heartexlabs/label-studio:20260404.151117-fb-bros-956-f3692362` | Labeling UI + API |
-| `db` | `postgres:15.17-alpine3.21` | Metadata store |
-| `redis` | `redis:7.4.5-alpine3.21` | Task queue / cache |
-| `minio` | `minio/minio:RELEASE.2025-10-15T17-29-55Z` ⚠️ | S3-compatible object storage |
+| `db` | `postgres:17` | Metadata store |
+| `redis` | `redis:8.6.2` | Task queue / cache |
+| `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` ⚠️ | S3-compatible object storage |
 | `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | One-shot bucket + CORS setup |
 | `nginx` | `nginx:1.28.3-alpine3.23` | Reverse proxy |
 | `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust tunnel |

@@ -71,7 +71,7 @@
 | `LABEL_STUDIO_API_KEY` | — | sam3-ml-backend 使用的 LS API 金鑰。建議建立專用 token（Settings → Access Tokens），與 `LABEL_STUDIO_USER_TOKEN` 分開管理 |
 | `SAM3_MODEL_ID` | `facebook/sam3` | HuggingFace Hub 模型 ID |
 | `DEVICE` | `cuda` | `cuda`（GPU）或 `cpu`（備援） |
-| `EMBED_CACHE_SIZE` | `50` | 記憶體中最大快取影像數 |
+| `EMBED_CACHE_SIZE` | `80` | 記憶體中最大快取影像數 |
 | `EMBED_CACHE_TTL` | `300` | 快取 TTL（秒） |
 
 ## 產生強密碼

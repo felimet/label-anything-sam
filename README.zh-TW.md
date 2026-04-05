@@ -9,9 +9,9 @@
 | 服務 | 映像 | 用途 |
 |------|------|------|
 | `label-studio` | `heartexlabs/label-studio:20260404.151117-fb-bros-956-f3692362` | 標注 UI + API |
-| `db` | `postgres:15.17-alpine3.21` | 資料庫 |
-| `redis` | `redis:7.4.5-alpine3.21` | 任務佇列 / 快取 |
-| `minio` | `minio/minio:RELEASE.2025-10-15T17-29-55Z` ⚠️ | S3 相容物件儲存 |
+| `db` | `postgres:17` | 資料庫 |
+| `redis` | `redis:8.6.2` | 任務佇列 / 快取 |
+| `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` ⚠️ | S3 相容物件儲存 |
 | `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | 一次性 bucket + CORS 初始化 |
 | `nginx` | `nginx:1.28.3-alpine3.23` | 反向代理 |
 | `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust Tunnel |
