@@ -1,10 +1,14 @@
-"""SAM3 interactive segmentation backend for Label Studio.
+"""SAM3 image segmentation backend for Label Studio.
 
-Implements LabelStudioMLBase with:
-- Sam3TrackerModel (PVS — Promptable Visual Segmentation, SAM2 drop-in)
-- Supports: keypoint (positive/negative) + rectangle box prompts
-- Output: BrushLabels with Label Studio RLE encoding
-- Image cache: PIL Image LRU to avoid repeated downloads
+Implements LabelStudioMLBase using facebookresearch/sam3:
+  - Prompt types: Text (open-vocab PCS) > Rectangle box > KeyPoint
+  - Output: BrushLabels with Label Studio RLE encoding (one result per detected instance)
+  - Image cache: PIL Image LRU to avoid repeated downloads
+
+SAM3 vs SAM2 key differences:
+  - text prompt: label name is used as open-vocabulary concept prompt
+  - PCS mode returns N instances per text prompt (masks: [N, H, W])
+  - Uses build_sam3_image_model() + Sam3Processor, NOT SAM2ImagePredictor
 """
 from __future__ import annotations
 
@@ -19,60 +23,76 @@ from xml.etree import ElementTree as ET
 import numpy as np
 import requests
 import torch
+from huggingface_hub import hf_hub_download
 from label_studio_converter import brush
 from label_studio_ml.model import LabelStudioMLBase
 from label_studio_ml.response import ModelResponse
 from PIL import Image
-from transformers import Sam3TrackerModel, Sam3TrackerProcessor
+
+# SAM3 package — installed via `pip install -e .` from facebookresearch/sam3
+from sam3.model_builder import build_sam3_image_model
+from sam3.model.sam3_image_processor import Sam3Processor
 
 logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
-MODEL_ID: str = os.getenv("SAM3_MODEL_ID", "facebook/sam3")
-EMBED_CACHE_SIZE: int = int(os.getenv("EMBED_CACHE_SIZE", "50"))
-EMBED_CACHE_TTL: float = float(os.getenv("EMBED_CACHE_TTL", "300"))
+MODEL_ID: str = os.getenv("SAM3_MODEL_ID", "facebook/sam3.1")
+# SAM3 checkpoint filename on HuggingFace (sam3.pt for sam3, sam3.1.pt for sam3.1)
+CHECKPOINT_FILENAME: str = os.getenv("SAM3_CHECKPOINT_FILENAME", "sam3.1.pt")
+MODEL_DIR: str = os.getenv("MODEL_DIR", "/data/models")
+
+IMAGE_CACHE_SIZE: int = int(os.getenv("IMAGE_CACHE_SIZE", "50"))
+IMAGE_CACHE_TTL: float = float(os.getenv("IMAGE_CACHE_TTL", "300"))
 
 # Label names interpreted as negative (background) prompts
 _NEGATIVE_LABELS = frozenset({"background", "negative", "neg", "背景"})
 
 
-class SAM3Backend(LabelStudioMLBase):
-    """SAM3 interactive segmentation backend.
+class NewModel(LabelStudioMLBase):
+    """SAM3 image segmentation backend.
 
     Workflow:
-    1. User clicks on image in Label Studio → context.result = [keypointlabels/rectanglelabels]
-    2. predict() parses the prompts, runs Sam3TrackerModel, returns BrushLabels RLE mask
-    3. Label Studio displays the mask overlay; user can refine with more clicks
+    1. User clicks/draws on image in Label Studio →
+       context.result = [keypointlabels|rectanglelabels]
+    2. predict() parses prompts, runs Sam3Processor, returns BrushLabels RLE masks.
+    3. Label Studio displays mask overlays; user can refine with more clicks.
 
-    Embedding optimization note:
-        Currently caches PIL Images to avoid re-download (~100ms saved).
-        Full image encoder re-runs on each click (~500–1500ms on GPU).
-        Production optimization: cache encoder output via model.vision_encoder(pixel_values)
-        and pass image_embeddings= on subsequent calls to the same task.
+    Prompt priority (higher wins):
+        text (label name as concept) > box (rectanglelabels) > point (keypointlabels)
+
+    SAM3 PCS note:
+        Text prompts return N instance masks. All instances are returned as
+        separate BrushLabels results, each with its own IoU score.
     """
 
     def setup(self) -> None:
-        self.set("model_version", f"sam3-tracker:{MODEL_ID.split('/')[-1]}")
-
         hf_token: Optional[str] = os.getenv("HF_TOKEN") or None
-        dtype = torch.bfloat16 if DEVICE == "cuda" else torch.float32
 
-        logger.info("Loading SAM3 model '%s' on %s (dtype=%s)", MODEL_ID, DEVICE, dtype)
-        self._model = Sam3TrackerModel.from_pretrained(
-            MODEL_ID,
-            torch_dtype=dtype,
-            token=hf_token,
-        ).to(DEVICE).eval()
-        self._processor = Sam3TrackerProcessor.from_pretrained(
-            MODEL_ID,
-            token=hf_token,
-        )
+        logger.info("Downloading SAM3 checkpoint '%s' …", MODEL_ID)
+        os.makedirs(MODEL_DIR, exist_ok=True)
+        try:
+            checkpoint_path = hf_hub_download(
+                repo_id=MODEL_ID,
+                filename=CHECKPOINT_FILENAME,
+                local_dir=MODEL_DIR,
+                token=hf_token,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to download SAM3 checkpoint from '{MODEL_ID}'. "
+                "Ensure HF_TOKEN is set and you have accepted the model license at "
+                f"https://huggingface.co/{MODEL_ID}"
+            ) from exc
 
-        # PIL Image cache: {url_md5: (timestamp, PIL.Image)}
+        logger.info("Loading SAM3 model on %s from %s", DEVICE, checkpoint_path)
+        model = build_sam3_image_model(checkpoint_path=checkpoint_path, device=DEVICE)
+        self._processor = Sam3Processor(model)
+
+        self.set("model_version", f"sam3-image:{MODEL_ID.split('/')[-1]}")
+        # PIL Image LRU cache: {url_md5: (timestamp, PIL.Image)}
         self._image_cache: dict[str, tuple[float, Image.Image]] = {}
-
-        logger.info("SAM3 model loaded. Device: %s", DEVICE)
+        logger.info("SAM3 image model loaded. Device: %s", DEVICE)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -82,8 +102,7 @@ class SAM3Backend(LabelStudioMLBase):
         context: Optional[dict] = None,
         **kwargs,
     ) -> ModelResponse:
-        # Without an interactive prompt, return empty predictions.
-        # SAM3 needs user input — it does not auto-segment.
+        # Interactive model: requires user prompt — no auto-segmentation.
         if not context or not context.get("result"):
             return ModelResponse(
                 predictions=[{"result": [], "score": 0.0} for _ in tasks]
@@ -93,92 +112,74 @@ class SAM3Backend(LabelStudioMLBase):
         return ModelResponse(predictions=predictions)
 
     def fit(self, event: str, data: dict, **kwargs) -> None:
-        """Receives annotation events — fine-tuning not implemented."""
+        """Annotation events received — fine-tuning not implemented."""
         logger.info("Received event '%s' (fine-tuning not implemented)", event)
 
-    # ── Private: single task inference ───────────────────────────────────────
+    # ── Private: single-task inference ───────────────────────────────────────
 
     def _predict_single(self, task: dict, context: dict) -> dict:
         image_url = self._get_image_url(task)
         if not image_url:
-            logger.warning("No image URL in task data: %s", list(task.get("data", {}).keys()))
+            logger.warning(
+                "No image URL in task data: %s", list(task.get("data", {}).keys())
+            )
             return {"result": [], "score": 0.0}
 
         image = self._load_image(image_url)
         orig_w, orig_h = image.size
 
-        points, labels, boxes = self._parse_context(context, orig_w, orig_h)
-        if not points and not boxes:
+        prompts = self._parse_context(context, orig_w, orig_h)
+        if not prompts["text"] and not prompts["points"] and not prompts["boxes"]:
             return {"result": [], "score": 0.0}
 
-        # Build processor kwargs — points take priority over box when both present
-        proc_kwargs: dict = {}
-        if points:
-            # Shape: [batch=1, num_obj=1, num_points, 2]
-            proc_kwargs["input_points"] = [[[p for p in points]]]
-            # Shape: [batch=1, num_obj=1, num_points]
-            proc_kwargs["input_labels"] = [[labels]]
-        elif boxes:
-            # Use first box only; shape: [batch=1, num_obj=1, 4]
-            proc_kwargs["input_boxes"] = [[[boxes[0]]]]
+        state = self._processor.set_image(image)
 
-        inputs = self._processor(images=image, return_tensors="pt", **proc_kwargs)
-        inputs = {k: v.to(DEVICE) for k, v in inputs.items()}
-
-        dtype = torch.bfloat16 if DEVICE == "cuda" else torch.float32
-        model_inputs = {
-            k: v.to(dtype) if torch.is_floating_point(v) else v
-            for k, v in inputs.items()
-        }
-
-        with torch.inference_mode():
-            outputs = self._model(**model_inputs, multimask_output=False)
-
-        # post_process_masks returns list[Tensor[num_obj, num_masks, H, W]]
-        masks = self._processor.post_process_masks(
-            outputs.pred_masks.cpu().float(),
-            inputs["original_sizes"].cpu(),
-            inputs["reshaped_input_sizes"].cpu(),
-        )
-
-        mask_tensor = masks[0]  # first (only) image in batch
-        # Shape guard: [num_obj, num_masks, H, W] or [num_obj, H, W]
-        if mask_tensor.dim() == 4:
-            mask_np = mask_tensor[0, 0].numpy().astype(bool)
-        elif mask_tensor.dim() == 3:
-            mask_np = mask_tensor[0].numpy().astype(bool)
+        # Prompt priority: text > box > point
+        if prompts["text"]:
+            out = self._processor.set_text_prompt(state=state, prompt=prompts["text"])
+        elif prompts["boxes"]:
+            out = self._processor.set_box_prompt(state=state, boxes=prompts["boxes"])
         else:
-            mask_np = mask_tensor.numpy().astype(bool)
-
-        score = 0.9
-        if hasattr(outputs, "iou_scores") and outputs.iou_scores is not None:
-            try:
-                score = float(outputs.iou_scores.cpu().flatten()[0])
-            except Exception:
-                pass
+            out = self._processor.set_point_prompt(
+                state=state,
+                points=prompts["points"],
+                labels=prompts["labels"],
+            )
 
         brush_from_name, image_to_name, label_name = self._parse_label_config()
 
-        # Convert mask → Label Studio RLE (NOT COCO RLE — use label_studio_converter)
-        mask_uint8 = (mask_np * 255).astype(np.uint8)
-        rle = brush.mask2rle(mask_uint8)
+        # SAM3 PCS: out["masks"] is [N, H, W] bool Tensor, out["scores"] is [N]
+        masks: torch.Tensor = out.get("masks", torch.zeros(0, orig_h, orig_w, dtype=torch.bool))
+        scores_raw = out.get("scores", torch.zeros(masks.shape[0]))
 
-        result = {
-            "from_name": brush_from_name,
-            "to_name": image_to_name,
-            "type": "brushlabels",
-            "original_width": orig_w,
-            "original_height": orig_h,
-            "image_rotation": 0,
-            "value": {
-                "format": "rle",
-                "rle": rle,
-                "brushlabels": [label_name],
-            },
-        }
+        results = []
+        for i in range(masks.shape[0]):
+            mask_np = masks[i].cpu().numpy().astype(bool)
+            if not mask_np.any():
+                continue  # skip empty masks
+
+            score = float(scores_raw[i].item()) if i < len(scores_raw) else 0.9
+            mask_uint8 = (mask_np * 255).astype(np.uint8)
+            rle = brush.mask2rle(mask_uint8)
+
+            results.append({
+                "from_name": brush_from_name,
+                "to_name": image_to_name,
+                "type": "brushlabels",
+                "original_width": orig_w,
+                "original_height": orig_h,
+                "image_rotation": 0,
+                "value": {
+                    "format": "rle",
+                    "rle": rle,
+                    "brushlabels": [label_name],
+                },
+            })
+
+        overall_score = float(scores_raw.max().item()) if len(scores_raw) > 0 else 0.0
         return {
-            "result": [result],
-            "score": score,
+            "result": results,
+            "score": overall_score,
             "model_version": self.get("model_version"),
         }
 
@@ -189,12 +190,19 @@ class SAM3Backend(LabelStudioMLBase):
         context: dict,
         orig_w: int,
         orig_h: int,
-    ) -> tuple[list[list[float]], list[int], list[list[float]]]:
-        """Extract pixel-coordinate points, SAM labels, and boxes from LS context.
+    ) -> dict:
+        """Extract prompts from Label Studio interactive context.
+
+        Returns dict with keys:
+            text   – str | None   (label name used as SAM3 text/concept prompt)
+            points – list[[x,y]]  (pixel coords)
+            labels – list[int]    (1=positive, 0=negative)
+            boxes  – list[[x1,y1,x2,y2]] (pixel coords)
 
         Label Studio sends percentage-based coordinates (0–100).
         SAM3 needs absolute pixel coordinates.
         """
+        text: Optional[str] = None
         points: list[list[float]] = []
         labels: list[int] = []
         boxes: list[list[float]] = []
@@ -209,8 +217,12 @@ class SAM3Backend(LabelStudioMLBase):
                 x_px = value["x"] / 100.0 * iw
                 y_px = value["y"] / 100.0 * ih
                 kp_labels: list[str] = value.get("keypointlabels", ["Object"])
-                # Map label name → SAM prompt polarity
                 is_neg = any(k.lower() in _NEGATIVE_LABELS for k in kp_labels)
+
+                if not is_neg and text is None:
+                    # Use first positive label name as SAM3 text concept
+                    text = kp_labels[0]
+
                 points.append([x_px, y_px])
                 labels.append(0 if is_neg else 1)
 
@@ -221,7 +233,11 @@ class SAM3Backend(LabelStudioMLBase):
                 y2 = y1 + value["height"] / 100.0 * ih
                 boxes.append([x1, y1, x2, y2])
 
-        return points, labels, boxes
+                rect_labels: list[str] = value.get("rectanglelabels", ["Object"])
+                if text is None and rect_labels:
+                    text = rect_labels[0]
+
+        return {"text": text, "points": points, "labels": labels, "boxes": boxes}
 
     # ── Private: image loading ────────────────────────────────────────────────
 
@@ -237,10 +253,10 @@ class SAM3Backend(LabelStudioMLBase):
         # Evict expired entries
         self._image_cache = {
             k: v for k, v in self._image_cache.items()
-            if now - v[0] < EMBED_CACHE_TTL
+            if now - v[0] < IMAGE_CACHE_TTL
         }
-        # Evict oldest when over size limit
-        if len(self._image_cache) >= EMBED_CACHE_SIZE and cache_key not in self._image_cache:
+        # Evict oldest when at capacity
+        if len(self._image_cache) >= IMAGE_CACHE_SIZE and cache_key not in self._image_cache:
             oldest = min(self._image_cache, key=lambda k: self._image_cache[k][0])
             del self._image_cache[oldest]
 
@@ -282,9 +298,9 @@ class SAM3Backend(LabelStudioMLBase):
 
             for elem in root.iter("BrushLabels"):
                 brush_from_name = elem.get("name", brush_from_name)
-                labels = [lbl.get("value", "Object") for lbl in elem.findall("Label")]
-                if labels:
-                    default_label = labels[0]
+                lbl_values = [lbl.get("value", "Object") for lbl in elem.findall("Label")]
+                if lbl_values:
+                    default_label = lbl_values[0]
                 break  # use first BrushLabels tag
 
             for elem in root.iter("Image"):

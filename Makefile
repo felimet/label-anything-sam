@@ -1,6 +1,8 @@
-.PHONY: up down restart logs ps gpu gpu-down \
+.PHONY: up down restart logs ps \
+        ml-up ml-down \
+        build-sam3-image build-sam3-video \
+        test-sam3-image test-sam3-video \
         init-minio health create-admin \
-        test-sam3 build-sam3 \
         push
 
 # ─── Core stack ─────────────────────────────────────────────
@@ -19,12 +21,28 @@ logs:
 ps:
 	docker compose ps
 
-# ─── GPU overlay (SAM3 backend) ──────────────────────────────
-gpu:
-	docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# ─── ML Backends (SAM3 image + video) ───────────────────────
+ml-up:
+	docker compose -f docker-compose.yml -f docker-compose.ml.yml up -d
 
-gpu-down:
-	docker compose -f docker-compose.yml -f docker-compose.gpu.yml down
+ml-down:
+	docker compose -f docker-compose.yml -f docker-compose.ml.yml down
+
+build-sam3-image:
+	docker compose -f docker-compose.yml -f docker-compose.ml.yml \
+		build sam3-image-backend
+
+build-sam3-video:
+	docker compose -f docker-compose.yml -f docker-compose.ml.yml \
+		build sam3-video-backend
+
+test-sam3-image:
+	docker compose -f docker-compose.yml -f docker-compose.ml.yml \
+		exec sam3-image-backend python -m pytest tests/ --tb=short -v
+
+test-sam3-video:
+	docker compose -f docker-compose.yml -f docker-compose.ml.yml \
+		exec sam3-video-backend python -m pytest tests/ --tb=short -v
 
 # ─── Initialisation ──────────────────────────────────────────
 init-minio:
@@ -36,15 +54,6 @@ create-admin:
 # ─── Health check ────────────────────────────────────────────
 health:
 	@bash scripts/healthcheck.sh
-
-# ─── SAM3 backend ────────────────────────────────────────────
-build-sam3:
-	docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
-		build sam3-ml-backend
-
-test-sam3:
-	docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
-		exec sam3-ml-backend python -m pytest tests/ --tb=short -v
 
 # ─── Git ─────────────────────────────────────────────────────
 push:

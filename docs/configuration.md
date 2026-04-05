@@ -69,12 +69,26 @@
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `HF_TOKEN` | — | HuggingFace Token；下載 `facebook/sam3` 必填 |
-| `LABEL_STUDIO_API_KEY` | — | sam3-ml-backend 使用的 LS API 金鑰。建議建立專用 token（Settings → Access Tokens），與 `LABEL_STUDIO_USER_TOKEN` 分開管理 |
-| `SAM3_MODEL_ID` | `facebook/sam3` | HuggingFace Hub 模型 ID |
-| `DEVICE` | `cuda` | `cuda`（GPU）或 `cpu`（備援） |
-| `EMBED_CACHE_SIZE` | `80` | 記憶體中最大快取影像數 |
-| `EMBED_CACHE_TTL` | `300` | 快取 TTL（秒） |
+| `HF_TOKEN` | — | HuggingFace Token；下載 `facebook/sam3.1` 必填（需先接受 Meta 授權） |
+| `LABEL_STUDIO_API_KEY` | — | 兩個 SAM3 後端共用的 LS API 金鑰。建議在 LS UI（Settings → Access Tokens）建立專用 token，與 `LABEL_STUDIO_USER_TOKEN` 分開管理 |
+| `SAM3_IMAGE_MODEL_ID` | `facebook/sam3.1` | 影像後端 HuggingFace Hub 模型 ID |
+| `SAM3_VIDEO_MODEL_ID` | `facebook/sam3.1` | 影片後端 HuggingFace Hub 模型 ID |
+| `DEVICE` | `cuda` | `cuda`（GPU）或 `cpu`（備援，極慢） |
+| `MAX_FRAMES_TO_TRACK` | `10` | 影片後端每次 predict 最多追蹤畫格數 |
+
+### 影像後端進階設定（compose env 直接設定）
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `IMAGE_CACHE_SIZE` | `50` | 記憶體中最大快取影像數（LRU） |
+| `IMAGE_CACHE_TTL` | `300` | 影像快取 TTL（秒） |
+| `SAM3_IMAGE_CHECKPOINT_FILENAME` | `sam3.1.pt` | HF Hub 上的 checkpoint 檔名 |
+
+### 說明
+
+- 兩個後端各自維護獨立的 `sam3-image-models` / `sam3-video-models` Volume 儲存下載的權重。
+- 共用 `hf-cache` Volume（`~/.cache/huggingface`）避免重複下載 HF 元資料。
+- 首次啟動下載約 3.5 GB 權重；健康檢查設 `start_period: 300s` 留足緩衝。
 
 ## 產生強密碼
 

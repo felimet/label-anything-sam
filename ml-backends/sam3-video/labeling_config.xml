@@ -1,0 +1,17 @@
+<!--
+  SAM3 Video Segmentation — Label Studio Labeling Config
+  ======================================================
+  Prompts:
+    - VideoRectangle: 在第一個畫格拉一個矩形框 → 觸發 SAM3 追蹤
+
+  Label name note:
+    Label name (e.g., "car", "person") is used as SAM3 text concept prompt.
+    framerate must match your actual video FPS.
+-->
+<View>
+  <Labels name="videoLabels" toName="video" allowEmpty="true">
+    <Label value="Object" background="#11A39E"/>
+  </Labels>
+  <Video name="video" value="$video" framerate="25.0"/>
+  <VideoRectangle name="box" toName="video" smart="true"/>
+</View>

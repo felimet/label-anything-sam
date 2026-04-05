@@ -1,13 +1,12 @@
 # ── PyTorch ───────────────────────────────────────────────────
-# Installed separately in Dockerfile via --index-url https://download.pytorch.org/whl/cu128
-# to guarantee CUDA builds. Not listed here to avoid version constraint conflicts.
+# Installed separately in Dockerfile via cu126 index URL.
+# Not listed here to avoid index conflict.
+
+# ── SAM3 ──────────────────────────────────────────────────────
+# Installed via `pip install -e .` from facebookresearch/sam3 (git clone in Dockerfile).
+# No PyPI package; source install required.
 
 # ── HuggingFace ──────────────────────────────────────────────
-# Pin to a version that includes Sam3TrackerModel / Sam3TrackerProcessor.
-# Verify: python -c "from transformers import Sam3TrackerModel"
-transformers>=4.57.0
-accelerate>=0.34.0
-safetensors>=0.4.0
 huggingface_hub>=0.27.0
 
 # ── Image processing ─────────────────────────────────────────
@@ -15,9 +14,11 @@ Pillow>=10.3.0
 numpy>=1.26.0,<2.0.0
 
 # ── Label Studio SDK ─────────────────────────────────────────
-label-studio-ml>=1.0.9
+# label-studio-ml is installed from git in Dockerfile — do NOT list here.
+# Listing it would cause pip to overwrite the VCS install with PyPI on
+# a plain `pip install -r requirements.txt` invocation.
 label-studio-sdk>=1.0.0
-# RLE encoding for BrushLabels (Label Studio custom format)
+# RLE encoding for BrushLabels (Label Studio custom format, NOT COCO RLE)
 label-studio-converter>=0.0.57
 # rq (Redis Queue) — used by label_studio_ml.api; not always pulled transitively
 rq>=1.16.0

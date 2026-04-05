@@ -1,0 +1,12 @@
+# PyTorch: installed in Dockerfile via cu126 index
+# SAM3: installed in Dockerfile via git clone + pip install -e .
+
+huggingface_hub>=0.27.0
+Pillow>=10.3.0
+numpy>=1.26.0,<2.0.0
+# label-studio-ml is installed from git in Dockerfile — do NOT list here.
+label-studio-sdk>=1.0.0
+label-studio-converter>=0.0.57
+rq>=1.16.0
+requests>=2.32.0
+gunicorn>=22.0.0

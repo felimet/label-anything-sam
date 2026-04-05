@@ -1,0 +1,32 @@
+<!--
+  SAM3 Image Segmentation — Label Studio Labeling Config
+  ======================================================
+  Prompts (用戶點擊觸發 smart predict):
+    - KeyPointLabels: 正向點 (object) / 負向點 (background)
+    - RectangleLabels: 矩形框 prompt
+  Output:
+    - BrushLabels: SAM3 返回的分割遮罩 (RLE 格式)
+
+  SAM3 text prompt note:
+    Label name (e.g., "car", "person") is used as the open-vocabulary
+    concept prompt. Use descriptive English noun phrases for best results.
+-->
+<View>
+  <Image name="image" value="$image" zoom="true" zoomControl="true"/>
+
+  <!-- Output: SAM3 mask results rendered as brush strokes -->
+  <BrushLabels name="brush" toName="image">
+    <Label value="Object" background="#FFA39E"/>
+  </BrushLabels>
+
+  <!-- Prompt: positive / negative keypoints (label name = text concept) -->
+  <KeyPointLabels name="kp" toName="image" smart="true">
+    <Label value="Object" background="#250dd3"/>
+    <Label value="background" background="#555555"/>
+  </KeyPointLabels>
+
+  <!-- Prompt: bounding box (label name = text concept) -->
+  <RectangleLabels name="rect" toName="image" smart="true">
+    <Label value="Object" background="#FFC069"/>
+  </RectangleLabels>
+</View>
