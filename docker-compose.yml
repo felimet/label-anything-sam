@@ -201,8 +201,6 @@ services:
     networks:
       - internal
 
-volumes:
-
 networks:
   internal:
     driver: bridge
