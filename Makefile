@@ -1,6 +1,8 @@
-.PHONY: up down restart logs ps gpu gpu-down \
+.PHONY: up down restart logs ps \
+        ml-up ml-down \
+        build-sam3-image build-sam3-video \
+        test-sam3-image test-sam3-video \
         init-minio health create-admin \
-        test-sam3 build-sam3 \
         push
 
 # ─── Core stack ─────────────────────────────────────────────
@@ -19,12 +21,28 @@ logs:
 ps:
 	docker compose ps
 
-# ─── GPU overlay (SAM3 backend) ──────────────────────────────
-gpu:
-	docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# ─── ML Backends (SAM3 image + video) ───────────────────────
+# override.yml must be included explicitly when using -f flags
+# (Docker Compose only auto-loads override.yml when no -f is specified)
+ML_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml
 
-gpu-down:
-	docker compose -f docker-compose.yml -f docker-compose.gpu.yml down
+ml-up:
+	$(ML_COMPOSE) up -d
+
+ml-down:
+	$(ML_COMPOSE) down
+
+build-sam3-image:
+	$(ML_COMPOSE) build sam3-image-backend
+
+build-sam3-video:
+	$(ML_COMPOSE) build sam3-video-backend
+
+test-sam3-image:
+	$(ML_COMPOSE) exec sam3-image-backend python -m pytest tests/ --tb=short -v
+
+test-sam3-video:
+	$(ML_COMPOSE) exec sam3-video-backend python -m pytest tests/ --tb=short -v
 
 # ─── Initialisation ──────────────────────────────────────────
 init-minio:
@@ -36,15 +54,6 @@ create-admin:
 # ─── Health check ────────────────────────────────────────────
 health:
 	@bash scripts/healthcheck.sh
-
-# ─── SAM3 backend ────────────────────────────────────────────
-build-sam3:
-	docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
-		build sam3-ml-backend
-
-test-sam3:
-	docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
-		exec sam3-ml-backend python -m pytest tests/ --tb=short -v
 
 # ─── Git ─────────────────────────────────────────────────────
 push:

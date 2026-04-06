@@ -9,11 +9,11 @@ name: label-studio
 services:
   label-studio:
     ports:
-      - "8085:8080"
+      - "18086:8080"
     environment:
-      - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=false
-      - DJANGO_LOG_LEVEL=DEBUG
-      - LOG_LEVEL=DEBUG
+      - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=${LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK:-true}
+      - DJANGO_LOG_LEVEL=INFO
+      - LOG_LEVEL=INFO
 
   minio:
     ports:
@@ -30,4 +30,4 @@ services:
 
   nginx:
     ports:
-      - "8090:80"
+      - "18090:80"

@@ -1,0 +1,91 @@
+# ============================================================
+# ML Backends Overlay — SAM3 Image + Video
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.ml.yml up -d
+#
+# Environment:
+#   cp .env.ml.example .env.ml  →  fill in values
+#   env_file loads all user-configurable vars into the container.
+#   environment: only sets static values (URL, paths, port).
+#
+# NOTE: No `name:` here — the base docker-compose.yml defines project name
+# `label-studio` and owns the `internal` network. Adding `name:` in an
+# overlay overrides the project name and breaks network sharing.
+# ============================================================
+
+services:
+
+  # ── SAM3 Image Backend ──────────────────────────────────────
+  sam3-image-backend:
+    build:
+      context: ./ml-backends/sam3-image
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.ml
+    environment:
+      - LABEL_STUDIO_URL=http://label-studio:8080
+      - MODEL_DIR=/data/models
+      - PORT=9090
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+      - sam3-image-models:/data/models
+      - ./ml-backends/sam3-image/model.py:/app/model.py:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 15s
+      start_period: 300s
+      retries: 5
+    depends_on:
+      label-studio:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ── SAM3 Video Backend ──────────────────────────────────────
+  sam3-video-backend:
+    build:
+      context: ./ml-backends/sam3-video
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.ml
+    environment:
+      - LABEL_STUDIO_URL=http://label-studio:8080
+      - MODEL_DIR=/data/models
+      - PORT=9090
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+      - sam3-video-models:/data/models
+      - ./ml-backends/sam3-video/model.py:/app/model.py:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 15s
+      start_period: 300s
+      retries: 5
+    depends_on:
+      label-studio:
+        condition: service_healthy
+    networks:
+      - internal
+
+volumes:
+  hf-cache:
+  sam3-image-models:
+  sam3-video-models:

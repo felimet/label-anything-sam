@@ -15,7 +15,8 @@
 | `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | 一次性 bucket + CORS 初始化 |
 | `nginx` | `nginx:1.28.3-alpine3.23` | 反向代理 |
 | `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust Tunnel |
-| `sam3-ml-backend` | (自訂建置) | SAM3 互動分割 *(需 GPU，可選)* |
+| `sam3-image-backend` | (自訂建置) | SAM3 影像分割 → BrushLabels *(需 GPU，可選)* |
+| `sam3-video-backend` | (自訂建置) | SAM3 影片物件追蹤 → VideoRectangle *(需 GPU，可選)* |
 
 > ⚠️ `minio/minio` 儲存庫已於 2026-02-13 封存，不再更新。`RELEASE.2025-10-15T17-29-55Z` 為最終版本（CVE 安全修補）。長期使用建議評估遷移至 Cloudflare R2 或 AWS S3。
 
@@ -24,7 +25,7 @@
 - Docker Engine ≥ 26 + Docker Compose v2
 - NVIDIA GPU + `nvidia-container-toolkit`（僅 SAM3 後端需要）
 - Cloudflare 帳號，已開啟 Zero Trust
-- HuggingFace 帳號，已同意 Meta `facebook/sam3` 使用條款
+- HuggingFace 帳號，已同意 Meta `facebook/sam3.1` 使用條款
 
 ## 快速開始
 
@@ -39,7 +40,7 @@ $EDITOR .env           # 填入所有 <PLACEHOLDER> 值
 make up                # 啟動核心服務（管理員帳號於首次啟動時自動建立）
 make init-minio        # 建立 S3 儲存桶 + 存取政策
 
-make gpu               # （可選）啟動 SAM3 GPU ML 後端
+make ml-up             # （可選）啟動 SAM3 影像 + 影片後端（需 GPU）
 ```
 
 在 Label Studio 中連接 MinIO 儲存：
@@ -51,11 +52,12 @@ make gpu               # （可選）啟動 SAM3 GPU ML 後端
 | 指令 | 說明 |
 |------|------|
 | `up / down / restart / logs / ps` | 核心服務生命週期管理 |
-| `gpu / gpu-down` | SAM3 GPU 疊加層 |
+| `ml-up / ml-down` | SAM3 ML 疊加層（影像 + 影片） |
+| `build-sam3-image / build-sam3-video` | 建置 ML 後端映像 |
+| `test-sam3-image / test-sam3-video` | 在容器內執行 pytest |
 | `init-minio` | 一次性儲存桶初始化 |
 | `create-admin` | 建立管理員帳號 |
 | `health` | 檢查所有服務狀態 |
-| `build-sam3 / test-sam3` | 建置映像 / 執行測試 |
 | `push` | git add + commit + push |
 
 ## 文件

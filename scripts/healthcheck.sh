@@ -67,23 +67,25 @@ else
     fail "Nginx not responding"
 fi
 
-# ── SAM3 ML Backend (optional — only when GPU stack running) ─
+# ── SAM3 ML Backends (optional — only when ML stack running) ─
 echo ""
-echo "── SAM3 ML Backend (GPU stack) ──"
-if docker compose ps sam3-ml-backend 2>/dev/null | grep -q running; then
-    if docker compose exec -T sam3-ml-backend curl -sf http://localhost:9090/health 2>/dev/null; then
-        pass "SAM3 backend /health OK"
+echo "── SAM3 ML Backends ──"
+for svc in sam3-image-backend sam3-video-backend; do
+    if docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml ps "$svc" 2>/dev/null | grep -qiE "Up|running"; then
+        if docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml exec -T "$svc" curl -sf http://localhost:9090/health 2>/dev/null; then
+            pass "$svc /health OK"
+        else
+            fail "$svc not responding"
+        fi
     else
-        fail "SAM3 backend not responding"
+        warn "$svc not running (start with: make ml-up)"
     fi
-else
-    warn "SAM3 backend not running (start with: make gpu)"
-fi
+done
 
 # ── Cloudflared ─────────────────────────────────────────────
 echo ""
 echo "── Cloudflare Tunnel ──"
-if docker compose ps cloudflared 2>/dev/null | grep -q running; then
+if docker compose ps cloudflared 2>/dev/null | grep -qiE "Up|running"; then
     pass "cloudflared container running"
 else
     warn "cloudflared not running"

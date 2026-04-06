@@ -25,7 +25,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB:-labelstudio}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-data:/var/lib/postgresql/data
       - ./postgres/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-labelstudio} -d ${POSTGRES_DB:-labelstudio}"]
@@ -47,7 +47,7 @@ services:
       --appendonly yes
       --appendfsync everysec
     volumes:
-      - redis-data:/data
+      - ./redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -58,9 +58,7 @@ services:
 
   # ── MinIO ───────────────────────────────────────────────────
   minio:
-    # WARNING: minio/minio repo archived 2026-02-13. No future updates.
-    # NOTE: RELEASE.2025-10-15T17-29-55Z patches a privilege escalation CVE; update if security is a concern.
-    image: "minio/minio:${MINIO_VERSION:-RELEASE.2025-09-07T16-13-09Z}"
+    image: "minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}"
     restart: unless-stopped
     logging: *default-logging
     command: server /data --console-address ":9001"
@@ -69,9 +67,14 @@ services:
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       # External domain — presigned URLs will use this base
       - MINIO_SERVER_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}
-      - MINIO_BROWSER_REDIRECT_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}/ui/
+      # MINIO_BROWSER_REDIRECT_URL removed: setting this disables the embedded console,
+      # causing MinIO to serve a redirect stub that fails to load its own JS (all paths
+      # return text/html + nosniff → React never initialises → blank page).
+      # CORS — allow browser uploads via presigned URLs.
+      # S3 PutBucketCors API was removed from MinIO open source; use server-level config.
+      - MINIO_API_CORS_ALLOW_ORIGIN=*
     volumes:
-      - minio-data:/data
+      - ./minio-data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 15s
@@ -127,8 +130,9 @@ services:
       # Cloudflare Tunnel forwards real IP/host via headers
       - USE_X_FORWARDED_HOST=true
       - USE_X_FORWARDED_PORT=true
-      # Trust CF Tunnel's forwarded headers
-      - DJANGO_CSRF_TRUSTED_ORIGINS=${LABEL_STUDIO_HOST}
+      # Label Studio reads CSRF_TRUSTED_ORIGINS (not DJANGO_CSRF_TRUSTED_ORIGINS)
+      # see label_studio/core/settings/base.py: get_env('CSRF_TRUSTED_ORIGINS', [])
+      - CSRF_TRUSTED_ORIGINS=${LABEL_STUDIO_HOST}
       # Storage — disable SSRF protection for internal MinIO calls
       - SSRF_PROTECTION_ENABLED=false
       - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
@@ -144,14 +148,16 @@ services:
       - LABEL_STUDIO_ENABLE_LEGACY_API_TOKEN=true
       # Security
       - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=${LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK:-true}
-      # Initial admin (only used on first run)
-      - DEFAULT_USERNAME=${LABEL_STUDIO_USERNAME:-admin@example.com}
-      - DEFAULT_USER_PASSWORD=${LABEL_STUDIO_PASSWORD}
+      # Initial admin (only used on first run against an empty DB).
+      # get_env('USERNAME') → tries LABEL_STUDIO_USERNAME first (see core/utils/params.py)
+      - LABEL_STUDIO_USERNAME=${LABEL_STUDIO_USERNAME}
+      - LABEL_STUDIO_PASSWORD=${LABEL_STUDIO_PASSWORD}
       # Logging
       - DJANGO_LOG_LEVEL=WARNING
       - LOG_LEVEL=WARNING
     volumes:
       - ./label-studio-data:/label-studio/data
+      - ./label-studio-data/local_storage_file:/label-studio/data/file
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
@@ -196,12 +202,6 @@ services:
         condition: service_healthy
     networks:
       - internal
-
-volumes:
-  postgres-data:
-  redis-data:
-  minio-data:
-  hf-cache:
 
 networks:
   internal:
