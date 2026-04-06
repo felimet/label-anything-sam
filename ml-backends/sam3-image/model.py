@@ -115,15 +115,18 @@ try:
     )
     logger.info("SAM3 image model loaded (PCS enabled=%s).", ENABLE_PCS)
 
-except ImportError:
+except ImportError as _sam3_err:
     _USING_SAM2_FALLBACK = True
     logger.warning(
-        "sam3 package not found — falling back to SAM2ImagePredictor. "
-        "Text prompts (PCS) will be IGNORED. "
-        "Install facebookresearch/sam3 when available."
+        "sam3 package import failed (%s) — falling back to SAM2ImagePredictor "
+        "bundled inside the sam3 source tree. "
+        "Text prompts (PCS) will be IGNORED.",
+        _sam3_err,
     )
-    ROOT_DIR = os.getcwd()
-    sys.path.insert(0, ROOT_DIR)
+    # SAM3 is installed from source at /sam3; SAM2 lives at /sam3/sam2/.
+    _sam3_src = "/sam3"
+    if _sam3_src not in sys.path:
+        sys.path.insert(0, _sam3_src)
     from sam2.build_sam import build_sam2                           # type: ignore[import]
     from sam2.sam2_image_predictor import SAM2ImagePredictor        # type: ignore[import]
 

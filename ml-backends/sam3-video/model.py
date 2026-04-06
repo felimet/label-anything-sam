@@ -116,28 +116,30 @@ _USING_SAM2_FALLBACK: bool = False
 try:
     from sam3.model.sam3_video_predictor import Sam3VideoPredictorMultiGPU  # type: ignore[import]
 
-    if ENABLE_FA3:
-        logger.info("Flash Attention 3 enabled (use_fa3=True, use_rope_real=True).")
-
-    logger.info("Loading SAM3 video predictor on %s (FA3=%s) …", DEVICE, ENABLE_FA3)
+    logger.info("Loading SAM3 video predictor on %s …", DEVICE)
+    # Sam3VideoPredictor API: checkpoint_path, async_loading_frames, video_loader_type, compile.
+    # FA3 is controlled by the environment (GPU capability check in model_misc.py),
+    # not by constructor arguments — no use_fa3 flag exists in this version.
     predictor = Sam3VideoPredictorMultiGPU(
         checkpoint_path=_checkpoint_path,
-        use_fa3=ENABLE_FA3,
-        use_rope_real=ENABLE_FA3,   # FA3 requires real-valued RoPE
         async_loading_frames=True,
         video_loader_type="cv2",    # internal cv2 frame loader — no manual splitting
     )
     logger.info("SAM3 video predictor loaded.")
 
-except ImportError:
+except ImportError as _sam3_err:
     _USING_SAM2_FALLBACK = True
     logger.warning(
-        "sam3 package not found — falling back to SAM2 video predictor. "
-        "Text prompts (PCS) will be IGNORED. "
-        "Install facebookresearch/sam3 when available."
+        "sam3 package import failed (%s) — falling back to SAM2 video predictor "
+        "bundled inside the sam3 source tree. "
+        "Text prompts (PCS) will be IGNORED.",
+        _sam3_err,
     )
-    ROOT_DIR = os.getcwd()
-    sys.path.insert(0, ROOT_DIR)
+    # SAM3 is installed from source at /sam3; SAM2 lives at /sam3/sam2/.
+    # We must add /sam3 to sys.path so that `import sam2` resolves correctly.
+    _sam3_src = "/sam3"
+    if _sam3_src not in sys.path:
+        sys.path.insert(0, _sam3_src)
     from sam2.build_sam import build_sam2_video_predictor  # type: ignore[import]
 
     predictor = build_sam2_video_predictor(
