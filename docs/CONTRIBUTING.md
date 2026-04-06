@@ -86,7 +86,7 @@ Install test dependencies:
 
 ```bash
 pip install label-studio-ml label-studio-sdk label-studio-converter \
-            Pillow numpy requests pytest
+            Pillow numpy torch pytest
 ```
 
 ### Running inside containers

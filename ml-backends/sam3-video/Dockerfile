@@ -17,15 +17,18 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_CACHE_DIR=/root/.cache/pip \
     PORT=9090 \
     WORKERS=1 \
-    THREADS=4 \
+    THREADS=8 \
+    TIMEOUT=300 \
     DEVICE=cuda \
     LOG_LEVEL=INFO \
-    HF_HOME=/root/.cache/huggingface \
-    TRANSFORMERS_CACHE=/root/.cache/huggingface \
+    HF_HOME=/home/appuser/.cache/huggingface \
+    TRANSFORMERS_CACHE=/home/appuser/.cache/huggingface \
     SAM3_MODEL_ID=facebook/sam3.1 \
     SAM3_CHECKPOINT_FILENAME=sam3.1.pt \
     MODEL_DIR=/data/models \
-    MAX_FRAMES_TO_TRACK=10
+    MAX_FRAMES_TO_TRACK=10 \
+    SAM3_ENABLE_PCS=true \
+    SAM3_ENABLE_FA3=false
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
@@ -56,14 +59,28 @@ RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
     && rm -rf /sam3/.git /sam3/notebooks /sam3/demo \
     && pip install -e /sam3
 
+# ── Optional: Flash Attention 3 + cc_torch (inference speedup) ───
+# Enabled via: docker compose build --build-arg ENABLE_FA3=true sam3-video-backend
+# FA3 is effective for video: build_sam3_video_predictor(use_fa3=True).
+# Also set SAM3_ENABLE_FA3=true in .env to activate at runtime.
+ARG ENABLE_FA3=false
+RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
+    if [ "$ENABLE_FA3" = "true" ]; then \
+        echo "Installing Flash Attention 3 and cc_torch …" && \
+        pip install einops ninja && \
+        pip install flash-attn-3 --no-deps \
+            --index-url https://download.pytorch.org/whl/cu128 && \
+        pip install git+https://github.com/ronghanghu/cc_torch.git; \
+    fi
+
 # ── App files ────────────────────────────────────────────────
 COPY . .
 RUN chmod +x start.sh
 
-# Non-root user
+# Non-root user — HF cache under home dir to avoid /root permission issues
 RUN useradd -m -u 1001 appuser \
-    && mkdir -p /data/models /root/.cache/huggingface \
-    && chown -R appuser:appuser /app /data /root/.cache/huggingface
+    && mkdir -p /data/models /home/appuser/.cache/huggingface \
+    && chown -R appuser:appuser /app /data /home/appuser/.cache
 
 USER appuser
 

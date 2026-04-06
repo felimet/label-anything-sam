@@ -46,12 +46,22 @@ Use `labeling_config.xml` as your project's labeling interface.
 | `HF_TOKEN` | — | HuggingFace access token (required for gated model) |
 | `LABEL_STUDIO_URL` | `http://label-studio:8080` | Label Studio internal URL |
 | `LABEL_STUDIO_API_KEY` | — | Label Studio API token |
-| `IMAGE_CACHE_SIZE` | `50` | Max cached PIL images |
-| `IMAGE_CACHE_TTL` | `300` | Cache TTL in seconds |
+| `SAM3_ENABLE_PCS` | `true` | Enable natural-language text prompts (PCS). Set `false` for geometry-only mode |
+| `SAM3_CONFIDENCE_THRESHOLD` | `0.5` | Minimum detection score for text-prompt results (0–1) |
+| `SAM3_RETURN_ALL_MASKS` | `false` | Return all detected instances (`true`) or only the top-scored one (`false`) |
 
-## Notes on Text Prompt
+## Predict Paths
 
-SAM3 uses **Promptable Concept Segmentation (PCS)**. When you click a KeyPoint or draw a Rectangle with a label like `"car"`, the label name is passed as the text concept to SAM3, which finds all matching instances in the image. Use descriptive English noun phrases for best results.
+Three paths, selectable by what is provided in the Label Studio context:
+
+| Input | Path | Notes |
+|-------|------|-------|
+| TextArea only | Text-only PCS | `set_text_prompt()` → up to N masks |
+| TextArea + geometry | Mixed | `set_text_prompt()` then `add_geometric_prompt()` |
+| Geometry only | Geometric | `add_geometric_prompt()` per prompt |
+| Any (SAM2 fallback) | SAM2 classic | Text ignored; geometric → `SAM2ImagePredictor.predict()` |
+
+> **Point prompts**: `Sam3Processor` only accepts boxes, not points. Each KeyPoint is represented as a tiny 1%-sized box with `label=True/False` for positive/negative.
 
 ## Running Tests
 

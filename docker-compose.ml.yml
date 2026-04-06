@@ -25,9 +25,17 @@ services:
       - MODEL_DIR=/data/models
       - DEVICE=${DEVICE:-cuda}
       - PORT=9090
-      - WORKERS=1
-      - THREADS=4
+      # WORKERS: 1 per GPU recommended (each worker preloads the full model into VRAM).
+      #   Raise to match GPU count for multi-GPU nodes (e.g. ML_WORKERS=2 for dual-GPU).
+      - WORKERS=${ML_WORKERS:-1}
+      # THREADS: threads share the same worker/model; raise freely on modern CPUs.
+      #   Default 8 suits 8-core machines; set ML_THREADS=16 for 16+ core servers.
+      - THREADS=${ML_THREADS:-8}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SAM3 PCS (text prompt) settings
+      - SAM3_ENABLE_PCS=${SAM3_ENABLE_PCS:-true}
+      - SAM3_CONFIDENCE_THRESHOLD=${SAM3_CONFIDENCE_THRESHOLD:-0.5}
+      - SAM3_RETURN_ALL_MASKS=${SAM3_RETURN_ALL_MASKS:-false}
       # Optional basic auth for the ML backend API
       - BASIC_AUTH_USER=${ML_BASIC_AUTH_USER:-}
       - BASIC_AUTH_PASS=${ML_BASIC_AUTH_PASS:-}
@@ -69,9 +77,17 @@ services:
       - DEVICE=${DEVICE:-cuda}
       - MAX_FRAMES_TO_TRACK=${MAX_FRAMES_TO_TRACK:-10}
       - PORT=9090
-      - WORKERS=1
-      - THREADS=4
+      # WORKERS: 1 per GPU recommended (each worker preloads the full model into VRAM).
+      #   Raise to match GPU count for multi-GPU nodes (e.g. ML_WORKERS=2 for dual-GPU).
+      - WORKERS=${ML_WORKERS:-1}
+      # THREADS: threads share the same worker/model; raise freely on modern CPUs.
+      #   Default 8 suits 8-core machines; set ML_THREADS=16 for 16+ core servers.
+      - THREADS=${ML_THREADS:-8}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SAM3 PCS (text prompt) + Flash Attention 3
+      - SAM3_ENABLE_PCS=${SAM3_ENABLE_PCS:-true}
+      # SAM3_ENABLE_FA3: requires ENABLE_FA3=true at build time AND flash-attn-3 installed
+      - SAM3_ENABLE_FA3=${SAM3_ENABLE_FA3:-false}
       # Optional basic auth for the ML backend API
       - BASIC_AUTH_USER=${ML_BASIC_AUTH_USER:-}
       - BASIC_AUTH_PASS=${ML_BASIC_AUTH_PASS:-}

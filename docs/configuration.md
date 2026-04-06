@@ -67,27 +67,53 @@
 
 ## SAM3 ML 後端
 
+<!-- AUTO-GENERATED from .env.example + docker-compose.ml.yml -->
+### 必填
+
+| 變數 | 說明 |
+|------|------|
+| `HF_TOKEN` | HuggingFace Token；下載 `facebook/sam3.1` 必填（需先接受 Meta 授權） |
+| `LABEL_STUDIO_API_KEY` | 兩個 SAM3 後端共用的 LS API 金鑰。建議在 LS UI（Settings → Access Tokens）建立專用 token，與 `LABEL_STUDIO_USER_TOKEN` 分開管理 |
+
+### 模型設定
+
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `HF_TOKEN` | — | HuggingFace Token；下載 `facebook/sam3.1` 必填（需先接受 Meta 授權） |
-| `LABEL_STUDIO_API_KEY` | — | 兩個 SAM3 後端共用的 LS API 金鑰。建議在 LS UI（Settings → Access Tokens）建立專用 token，與 `LABEL_STUDIO_USER_TOKEN` 分開管理 |
 | `SAM3_IMAGE_MODEL_ID` | `facebook/sam3.1` | 影像後端 HuggingFace Hub 模型 ID |
 | `SAM3_VIDEO_MODEL_ID` | `facebook/sam3.1` | 影片後端 HuggingFace Hub 模型 ID |
 | `DEVICE` | `cuda` | `cuda`（GPU）或 `cpu`（備援，極慢） |
 | `MAX_FRAMES_TO_TRACK` | `10` | 影片後端每次 predict 最多追蹤畫格數 |
 
-### 影像後端進階設定（compose env 直接設定）
+### PCS（文字概念提示）設定
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `IMAGE_CACHE_SIZE` | `50` | 記憶體中最大快取影像數（LRU） |
-| `IMAGE_CACHE_TTL` | `300` | 影像快取 TTL（秒） |
-| `SAM3_IMAGE_CHECKPOINT_FILENAME` | `sam3.1.pt` | HF Hub 上的 checkpoint 檔名 |
+| `SAM3_ENABLE_PCS` | `true` | 啟用自然語言文字提示（PCS）功能。`false` = 退化為 SAM2 幾何模式 |
+| `SAM3_CONFIDENCE_THRESHOLD` | `0.5` | 文字提示偵測的最低置信分數（`0`–`1`；越低偵測越多但可能有假陽性） |
+| `SAM3_RETURN_ALL_MASKS` | `false` | `true` = 回傳所有偵測實例；`false` = 只回傳得分最高的一個 |
+
+### Flash Attention 3 設定（影片後端）
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `SAM3_ENABLE_FA3` | `false` | 啟用 Flash Attention 3 推論加速（需在 build-time 先傳入 `--build-arg ENABLE_FA3=true`） |
+
+### Gunicorn 並發設定
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `ML_WORKERS` | `1` | Gunicorn workers 數（每個 worker preload 完整模型至 VRAM）。單 GPU 建議保持 1；雙 GPU 可設 2 |
+| `ML_THREADS` | `8` | 每個 worker 的執行緒數（gthread 模式，共享模型權重，不額外佔用 VRAM）。8-core CPU 適用 8；16-core 可設 16 |
+| `ML_BASIC_AUTH_USER` | — | ML backend API 的 Basic Auth 帳號（選填） |
+| `ML_BASIC_AUTH_PASS` | — | ML backend API 的 Basic Auth 密碼（選填） |
+
+> `TIMEOUT` 由 Dockerfile ENV 定義（image: 120 s、video: 300 s），可在 compose 的 environment 區塊中覆寫。
+<!-- END AUTO-GENERATED -->
 
 ### 說明
 
 - 兩個後端各自維護獨立的 `sam3-image-models` / `sam3-video-models` Volume 儲存下載的權重。
-- 共用 `hf-cache` Volume（`~/.cache/huggingface`）避免重複下載 HF 元資料。
+- 共用 `hf-cache` Volume（`/home/appuser/.cache/huggingface`）避免重複下載 HF 元資料。
 - 首次啟動下載約 3.5 GB 權重；健康檢查設 `start_period: 300s` 留足緩衝。
 
 ## 產生強密碼
