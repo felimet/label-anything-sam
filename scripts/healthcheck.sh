@@ -71,8 +71,8 @@ fi
 echo ""
 echo "── SAM3 ML Backends ──"
 for svc in sam3-image-backend sam3-video-backend; do
-    if docker compose -f docker-compose.yml -f docker-compose.ml.yml ps "$svc" 2>/dev/null | grep -q running; then
-        if docker compose -f docker-compose.yml -f docker-compose.ml.yml exec -T "$svc" curl -sf http://localhost:9090/health 2>/dev/null; then
+    if docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml ps "$svc" 2>/dev/null | grep -qiE "Up|running"; then
+        if docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml exec -T "$svc" curl -sf http://localhost:9090/health 2>/dev/null; then
             pass "$svc /health OK"
         else
             fail "$svc not responding"
@@ -85,7 +85,7 @@ done
 # ── Cloudflared ─────────────────────────────────────────────
 echo ""
 echo "── Cloudflare Tunnel ──"
-if docker compose ps cloudflared 2>/dev/null | grep -q running; then
+if docker compose ps cloudflared 2>/dev/null | grep -qiE "Up|running"; then
     pass "cloudflared container running"
 else
     warn "cloudflared not running"
