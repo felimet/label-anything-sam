@@ -143,13 +143,77 @@ openssl rand -base64 24
 | 目錄（host） | 容器內路徑 | 對應服務 | 內容 | 備份方式 |
 |-------------|-----------|----------|------|----------|
 | `./label-studio-data/` | `/label-studio/data/` | label-studio | 標注資料、匯出檔 | 直接 `tar` 壓縮 |
-| `./label-studio-data/file/` | `/label-studio/data/file/` | label-studio | Local files storage 根目錄；UI 中填容器內路徑（如 `/label-studio/data/file/1`） | 直接 `tar` 壓縮 |
+| `./label-studio-data/local_storage_file/` | `/label-studio/data/file/` | label-studio | **Local files storage 根目錄**（詳見下方說明） | 直接 `tar` 壓縮 |
 | `./postgres-data/` | `/var/lib/postgresql/data/` | db | 資料庫（PostgreSQL 內部格式）| **必須用 `pg_dump`**，不可直接複製 |
 | `./minio-data/` | `/data/` | minio | 上傳的影像、影片等媒體檔案 | 直接 `tar` 壓縮 |
 | `./redis-data/` | `/data/` | redis | 任務佇列暫存（重啟後自動恢復）| 通常不需備份 |
 <!-- END AUTO-GENERATED -->
 
 > `postgres-data/` 是 PostgreSQL 的二進位內部格式，**直接複製無法還原**。備份請用 `pg_dump`（見 [Runbook → Backup](RUNBOOK.md#backup)）。
+
+## 兩種媒體存放方式：MinIO vs Local Files
+
+Label Studio 支援兩種方式存放要標注的媒體檔案，適用情境不同：
+
+| | **MinIO** | **Local Files Storage** |
+|---|---|---|
+| 存放位置 | `./minio-data/`（物件儲存） | `./label-studio-data/local_storage_file/` |
+| 如何放入 | 透過 Label Studio UI 上傳 | 直接複製到 host 資料夾 |
+| 適合情境 | 需要遠端多人協作、檔案從網路上傳 | 本機已有大量資料、不想重複上傳 |
+| 存取方式 | 透過 Presigned URL（可公開分享） | 僅限容器內路徑存取 |
+| 容量限制 | 受磁碟空間限制，但可擴充 | 同上 |
+
+**一般建議**：資料已在本機（如 `D:\datasets\`）→ 用 Local Files；需要從其他電腦上傳或多人共用 → 用 MinIO。
+
+---
+
+## Local Files Storage：直接掛載本機資料夾，不用上傳
+
+只要把本機已有的資料夾掛進容器，Label Studio 就能直接讀取，**省去上傳步驟**。
+
+### 運作方式
+
+```
+本機                              容器內
+./label-studio-data/
+  local_storage_file/     →      /label-studio/data/file/
+    project1/                      project1/
+      img001.jpg                     img001.jpg
+      img002.jpg                     img002.jpg
+```
+
+`docker-compose.yml` 已設定：
+```yaml
+- ./label-studio-data/local_storage_file:/label-studio/data/file
+```
+
+### 使用步驟
+
+1. 把要標注的資料放到 host 上的 `./label-studio-data/local_storage_file/` 子目錄，例如：
+   ```
+   label-studio-data/local_storage_file/project1/img001.jpg
+   ```
+
+2. 在 Label Studio UI → Project → Cloud Storage → Add Source Storage：
+   - Storage type：**Local files**
+   - Absolute local path：`/label-studio/data/file/project1`（容器內路徑）
+
+3. 點 **Sync**，Label Studio 即可讀取該目錄下的所有檔案，無需上傳。
+
+> **注意**：UI 中填的是**容器內路徑**（`/label-studio/data/file/...`），不是 host 路徑。
+
+### 想掛載其他本機資料夾
+
+若資料已存放在本機其他位置（例如 `D:\datasets\my-project`），可在 `docker-compose.yml` 額外新增一個 volume：
+
+```yaml
+label-studio:
+  volumes:
+    - ./label-studio-data/local_storage_file:/label-studio/data/file
+    - D:\datasets\my-project:/label-studio/data/file/my-project  # 額外掛載
+```
+
+掛載後在 UI 中填 `/label-studio/data/file/my-project` 即可，資料完全不需要複製或上傳。
 
 ## 從舊版 Named Volume 遷移到 Bind Mount
 
