@@ -70,6 +70,9 @@ services:
       # External domain — presigned URLs will use this base
       - MINIO_SERVER_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}
       - MINIO_BROWSER_REDIRECT_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}/ui/
+      # CORS — allow browser uploads via presigned URLs.
+      # S3 PutBucketCors API was removed from MinIO open source; use server-level config.
+      - MINIO_API_CORS_ALLOW_ORIGIN=*
     volumes:
       - minio-data:/data
     healthcheck:

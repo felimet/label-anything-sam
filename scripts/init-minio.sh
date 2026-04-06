@@ -25,21 +25,10 @@ echo "[init-minio] Setting download policy on ${BUCKET}"
 mc anonymous set download "${MINIO_ALIAS}/${BUCKET}"
 
 # ── CORS ──────────────────────────────────────────────────
-# Label Studio UI (browser) needs CORS to PUT files and GET presigned URLs.
-echo "[init-minio] Setting CORS on ${BUCKET}"
-mc cors set "${MINIO_ALIAS}/${BUCKET}" - <<'EOF'
-{
-  "CORSRules": [
-    {
-      "AllowedHeaders": ["*"],
-      "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
-      "AllowedOrigins": ["*"],
-      "ExposeHeaders": ["ETag", "x-amz-request-id"],
-      "MaxAgeSeconds": 3000
-    }
-  ]
-}
-EOF
+# MinIO open-source editions >= 2024 removed the S3 PutBucketCors API.
+# CORS is now controlled via MINIO_API_CORS_ALLOW_ORIGIN env var (set in
+# docker-compose.yml on the minio service) — no mc command needed here.
+echo "[init-minio] CORS handled via MINIO_API_CORS_ALLOW_ORIGIN server env var."
 
 echo "[init-minio] Verifying bucket..."
 mc ls "${MINIO_ALIAS}/${BUCKET}" && echo "[init-minio] Done."
