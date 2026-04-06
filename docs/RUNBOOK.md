@@ -167,6 +167,24 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml \
   restart sam3-image-backend sam3-video-backend
 ```
 
+### SAM3 backend — Cannot re-initialize CUDA in forked subprocess
+
+若看到 `RuntimeError: Cannot re-initialize CUDA in forked subprocess`，表示 CUDA 在 gunicorn master 程序中被初始化，fork 後 worker 無法重新初始化。
+
+**根因**：`start.sh` 中使用了 `--preload`，或模組級程式碼觸發了 CUDA 初始化（如 `torch.cuda.get_device_properties()`）。
+
+**修復**：
+1. 確認 `start.sh` **沒有** `--preload` 旗標
+2. 確認 `model.py` 使用 `_ensure_loaded()` 延遲載入模式（不在模組層級建模型）
+3. 確認 `gunicorn.conf.py` 存在且包含 `post_fork` hook 重置 CUDA 狀態
+
+```bash
+# 檢查是否誤用 --preload
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml \
+  exec sam3-image-backend cat /app/start.sh | grep preload
+# 應該沒有輸出；若有 --preload 須移除
+```
+
 ### SAM3 backend — CUDA out of memory
 
 Reduce concurrent workers (already set to 1 in Dockerfile CMD). If OOM still occurs:

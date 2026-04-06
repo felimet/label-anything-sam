@@ -86,7 +86,7 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 | 變數 | 說明 |
 |------|------|
-| `LABEL_STUDIO_API_KEY` | 兩個 SAM3 後端共用的 LS API 金鑰。建議在 LS UI（Settings → Access Tokens）建立專用 token，與 `LABEL_STUDIO_USER_TOKEN` 分開管理 |
+| `LABEL_STUDIO_API_KEY` | 兩個 SAM3 後端共用的 LS API 金鑰。**必須使用 Legacy Token**（LS UI → Account & Settings → Legacy Token）。ML backend SDK 以 `Authorization: Token <key>` 格式驗證，Personal Access Token（JWT Bearer）會導致 401。此值與 `.env` 的 `LABEL_STUDIO_USER_TOKEN` 相同 |
 | `HF_TOKEN` | HuggingFace Token；下載 `facebook/sam3.1` 必填（需先接受 Meta 授權） |
 
 ### 模型設定
@@ -122,7 +122,7 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `WORKERS` | `1` | Gunicorn worker 數（每個 worker preload 完整模型至 VRAM）。單 GPU 建議保持 1；雙 GPU 可設 2 |
+| `WORKERS` | `1` | Gunicorn worker 數（每個 worker 獨立載入模型至 VRAM）。單 GPU 建議保持 1；雙 GPU 可設 2 |
 | `THREADS` | `8` | 每個 worker 的執行緒數（gthread 模式，共享模型權重，不額外佔用 VRAM）。8-core CPU 適用 8；16-core 可設 16 |
 
 ### 日誌與驗證

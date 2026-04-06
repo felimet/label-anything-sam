@@ -19,6 +19,15 @@ SAM3（Segment Anything Model 3）是 Meta 於 2025 年 11 月釋出的下一代
 > 影片端：`Sam3VideoPredictorMultiGPU`（session-based API，`handle_request / handle_stream_request`）
 > 不需手動 cv2 畫格分割——SAM3 影片端以 `video_loader_type="cv2"` 在內部處理。
 
+## 架構：Lazy Model Loading
+
+兩個後端均採用 **延遲載入** 模式：checkpoint 在模組載入時下載，但模型本體在首次 `predict()` 呼叫時才於 worker 程序內載入（`_ensure_loaded()`）。這避免了 gunicorn master 程序初始化 CUDA，導致 fork 後所有 worker 出現 `RuntimeError: Cannot re-initialize CUDA in forked subprocess`。
+
+關鍵約束：
+- `start.sh` **禁止** 使用 `--preload`（會在 master 載入 app，觸發 CUDA 初始化）
+- `gunicorn.conf.py` 的 `post_fork` hook 會重置 PyTorch CUDA 狀態作為額外保險
+- 模組層級 **禁止** 呼叫 `torch.cuda.get_device_properties()` 等 CUDA 初始化函式
+
 ## 啟動
 
 ```bash
@@ -47,7 +56,7 @@ make test-sam3-video    # 在容器內執行影片後端 pytest
 1. 同上，URL：`http://sam3-video-backend:9090`
 2. 需要含有 `<Video>` 與 `<VideoRectangle>` 標籤的標注配置
 
-> 兩個後端共用同一個 `LABEL_STUDIO_API_KEY`。建議在 LS UI（Settings → Access Tokens）建立獨立的 token 後填入 `.env`。
+> 兩個後端共用同一個 `LABEL_STUDIO_API_KEY`。**必須使用 Legacy Token**（LS UI → Account & Settings → Legacy Token），與 `.env` 的 `LABEL_STUDIO_USER_TOKEN` 為同一組值。ML backend SDK 以 `Authorization: Token <key>` 驗證；Personal Access Token（JWT Bearer）會導致 401 Unauthorized。
 
 ## 影像後端
 
@@ -64,7 +73,7 @@ Settings → Labeling Interface → Code → 貼上 XML
 | `<TextArea name="text_prompt">` | 文字提示 | PCS 自然語言提示（純 SAM3 功能） |
 | `<KeyPointLabels smart="true">` | 點擊提示 | 正向（foreground）或負向（background）點 |
 | `<RectangleLabels smart="true">` | 框選提示 | SAM3 邊界框約束 |
-| `<BrushLabels>` | 輸出 | SAM3 遮罩（Label Studio RLE 格式） |
+| `<BrushLabels smart="true">` | 輸出 | SAM3 遮罩（Label Studio RLE 格式）；**必須** `smart="true"` 否則前端不會觸發 predict |
 
 ### Predict 路徑
 
@@ -161,6 +170,7 @@ Label Studio（渲染多畫格追蹤框）
 | 追蹤長度上限 | 最多 `MAX_FRAMES_TO_TRACK` 畫格（預設 10） |
 | Flash Attention 3 | 需 build-time `--build-arg ENABLE_FA3=true` 且設 `SAM3_ENABLE_FA3=true` |
 | SAM2 fallback 文字提示 | SAM2 不支援 PCS，文字提示記 WARNING 並被忽略 |
+| gunicorn `--preload` | **禁止使用**。`--preload` 在 master 程序載入 app，觸發 CUDA 初始化，fork 後所有 worker 失敗 |
 
 ## Flash Attention 3（選用加速）
 
