@@ -78,7 +78,7 @@ Settings → Labeling Interface → Code → 貼上 XML
 ### Predict 路徑
 
 <!-- AUTO-GENERATED from ml-backends/sam3-image/model.py -->
-**Last Updated:** 2026-04-06
+**Last Updated:** 2026-04-07
 
 三條路徑依序判斷，並可任意組合：
 

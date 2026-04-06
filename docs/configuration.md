@@ -77,7 +77,7 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 ## SAM3 ML 後端
 
 <!-- AUTO-GENERATED from .env.ml.example + docker-compose.ml.yml -->
-**Last Updated:** 2026-04-06
+**Last Updated:** 2026-04-07
 
 > 所有 SAM3 變數定義於 `.env.ml`（從 `.env.ml.example` 複製後填入）。
 > `docker-compose.ml.yml` 透過 `env_file: .env.ml` 載入；`environment:` 區塊僅含靜態值（URL、路徑、port）。
@@ -164,9 +164,10 @@ openssl rand -base64 24
 |-------------|-----------|----------|------|----------|
 | `./label-studio-data/` | `/label-studio/data/` | label-studio | 標注資料、匯出檔 | 直接 `tar` 壓縮 |
 | `./label-studio-data/local_storage_file/` | `/label-studio/data/file/` | label-studio | **Local files storage 根目錄**（詳見下方說明） | 直接 `tar` 壓縮 |
-| `./postgres-data/` | `/var/lib/postgresql/data/` | db | 資料庫（PostgreSQL 內部格式）| **必須用 `pg_dump`**，不可直接複製 |
+| `./postgres-data/` | `/var/lib/postgresql/data/` | db | 資料庫（PostgreSQL 內部格式） | **必須用 `pg_dump`**，不可直接複製 |
 | `./minio-data/` | `/data/` | minio | 上傳的影像、影片等媒體檔案 | 直接 `tar` 壓縮 |
-| `./redis-data/` | `/data/` | redis | 任務佇列暫存（重啟後自動恢復）| 通常不需備份 |
+| `./redis-data/` | `/data/` | redis | 任務佇列暫存（重啟後自動恢復） | 通常不需備份 |
+| `./scripts/` | `/scripts/` | minio-init（唯讀） | MinIO 初始化腳本 | 版本控制中，無需另行備份 |
 <!-- END AUTO-GENERATED -->
 
 > `postgres-data/` 是 PostgreSQL 的二進位內部格式，**直接複製無法還原**。備份請用 `pg_dump`（見 [Runbook → Backup](RUNBOOK.md#backup)）。

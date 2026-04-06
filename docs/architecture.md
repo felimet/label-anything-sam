@@ -74,10 +74,11 @@ sequenceDiagram
 
 | Volume / 路徑 | 類型 | 掛載服務 | 內容 |
 |---------------|------|----------|------|
-| `postgres-data` | named volume | db | PostgreSQL 資料檔 |
-| `redis-data` | named volume | redis | Redis AOF / RDB |
-| `minio-data` | named volume | minio | 物件儲存資料 |
+| `./postgres-data` | bind mount | db | PostgreSQL 資料檔 |
+| `./redis-data` | bind mount | redis | Redis AOF / RDB |
+| `./minio-data` | bind mount | minio | 物件儲存資料 |
 | `./label-studio-data` | bind mount | label-studio | 媒體檔、匯出、上傳；host 端可直接觀察 |
+| `./label-studio-data/local_storage_file` | bind mount | label-studio | Local files storage 根目錄（容器內 `/label-studio/data/file`） |
 | `hf-cache` | named volume | sam3-image-backend, sam3-video-backend | HuggingFace Hub 快取（`~/.cache/huggingface`） |
 | `sam3-image-models` | named volume | sam3-image-backend | SAM3 影像模型權重（`/data/models`） |
 | `sam3-video-models` | named volume | sam3-video-backend | SAM3 影片模型權重（`/data/models`） |
@@ -90,8 +91,8 @@ sequenceDiagram
 
 | 服務 | 主機埠號 |
 |------|----------|
-| nginx | 8090 |
-| label-studio | 8085 |
+| nginx | 18090 |
+| label-studio | 18086 |
 | minio API | 19000 |
 | minio console | 19001 |
 | postgres | 5433 |

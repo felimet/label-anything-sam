@@ -19,7 +19,7 @@ SAM3 video API (facebookresearch/sam3)
                                "session_id": session_id,
                                "frame_index": 0,
                                "text": "optional text prompt",
-                               "bounding_boxes": [[x0, y0, w, h]],   # pixel xywh
+                               "bounding_boxes": [[x0, y0, w, h]],   # normalised [0-1] xywh (NOT pixel)
                                "bounding_box_labels": [1],
                                "points": [[px, py]],                  # pixel xy
                                "point_labels": [1],
@@ -76,7 +76,7 @@ logger = logging.getLogger(__name__)
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 MODEL_ID: str = os.getenv("SAM3_MODEL_ID", "facebook/sam3.1")
 CHECKPOINT_FILENAME: str = os.getenv("SAM3_CHECKPOINT_FILENAME", "sam3.1_multiplex.pt")
-MODEL_DIR: str = os.getenv("MODEL_DIR", "/data/models")
+MODEL_DIR: str = os.getenv("SAM3_MODEL_DIR", os.getenv("MODEL_DIR", "/data/models"))
 MAX_FRAMES_TO_TRACK: int = int(os.getenv("MAX_FRAMES_TO_TRACK", "10"))
 
 ENABLE_PCS: bool = os.getenv("SAM3_ENABLE_PCS", "true").lower() == "true"
@@ -357,7 +357,7 @@ class NewModel(LabelStudioMLBase):
         text_prompt: Optional[str],
         fps: float,
     ) -> tuple[list[dict], set[str]]:
-        all_obj_ids: set[str] = {p["obj_id"] for p in geo_prompts}
+        all_obj_ids: set[str] = {p["obj_id"] for p in geo_prompts} or {"text_obj"}
         obj_id_map: dict[str, int] = {oid: i for i, oid in enumerate(all_obj_ids)}
 
         start_frame = min((p["frame_idx"] for p in geo_prompts), default=0)
@@ -379,6 +379,20 @@ class NewModel(LabelStudioMLBase):
                 logger.warning("Could not probe video dimensions for %s; boxes skipped.", video_path)
                 vid_w = vid_h = 0
 
+            assert _predictor is not None  # guaranteed by _ensure_loaded() above
+
+            # Text-only path: no geo_prompts, send a single add_prompt at frame 0
+            if not geo_prompts and text_prompt and ENABLE_PCS:
+                _predictor.handle_request({
+                    "type":             "add_prompt",
+                    "session_id":       session_id,
+                    "frame_index":      0,
+                    "obj_id":           0,
+                    "text":             text_prompt,
+                    "clear_old_boxes":  False,
+                    "clear_old_points": False,
+                })
+
             # Group prompts by frame_idx
             from collections import defaultdict
             prompts_by_frame: dict[int, list[dict]] = defaultdict(list)
@@ -398,27 +412,27 @@ class NewModel(LabelStudioMLBase):
                 )
                 box_obj_ids: list[str] = []
 
-                if vid_w > 0 and vid_h > 0:
-                    for p in frame_prompts:
-                        if p["type"] == "box":
-                            x0 = p["x_pct"] / 100.0 * vid_w
-                            y0 = p["y_pct"] / 100.0 * vid_h
-                            bw = p["w_pct"] / 100.0 * vid_w
-                            bh = p["h_pct"] / 100.0 * vid_h
-                            by_obj[p["obj_id"]]["boxes"].append([x0, y0, bw, bh])
-                            if p["obj_id"] not in box_obj_ids:
-                                box_obj_ids.append(p["obj_id"])
-                        elif p["type"] == "point":
-                            px = p["x_pct"] / 100.0 * vid_w
-                            py = p["y_pct"] / 100.0 * vid_h
-                            if p["is_positive"]:
-                                by_obj[p["obj_id"]]["pos_points"].append([px, py])
-                            else:
-                                # Background hint → attach to all box objects; if
-                                # none exist, attach to own obj_id.
-                                targets = box_obj_ids if box_obj_ids else [p["obj_id"]]
-                                for oid in targets:
-                                    by_obj[oid]["neg_points"].append([px, py])
+                for p in frame_prompts:
+                    if p["type"] == "box":
+                        # SAM3 requires normalised [0, 1] xywh (assertion in sam3_video_inference.py:891)
+                        x0 = p["x_pct"] / 100.0
+                        y0 = p["y_pct"] / 100.0
+                        bw = p["w_pct"] / 100.0
+                        bh = p["h_pct"] / 100.0
+                        by_obj[p["obj_id"]]["boxes"].append([x0, y0, bw, bh])
+                        if p["obj_id"] not in box_obj_ids:
+                            box_obj_ids.append(p["obj_id"])
+                    elif p["type"] == "point" and vid_w > 0 and vid_h > 0:
+                        px = p["x_pct"] / 100.0 * vid_w
+                        py = p["y_pct"] / 100.0 * vid_h
+                        if p["is_positive"]:
+                            by_obj[p["obj_id"]]["pos_points"].append([px, py])
+                        else:
+                            # Background hint → attach to all box objects; if
+                            # none exist, attach to own obj_id.
+                            targets = box_obj_ids if box_obj_ids else [p["obj_id"]]
+                            for oid in targets:
+                                by_obj[oid]["neg_points"].append([px, py])
 
                 if not by_obj:
                     # Dimension probe failed; still send text prompt if available.
@@ -462,7 +476,7 @@ class NewModel(LabelStudioMLBase):
                     _predictor.handle_request(req)
 
             # Propagate forward from the last prompted frame
-            last_frame = max(p["frame_idx"] for p in geo_prompts)
+            last_frame = max((p["frame_idx"] for p in geo_prompts), default=0)
             sequence: list[dict] = []
 
             for frame_data in _predictor.handle_stream_request({

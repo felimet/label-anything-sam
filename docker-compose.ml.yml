@@ -30,6 +30,7 @@ services:
     volumes:
       - hf-cache:/root/.cache/huggingface
       - sam3-image-models:/data/models
+      - ./ml-backends/sam3-image/model.py:/app/model.py:ro
     deploy:
       resources:
         reservations:
@@ -64,6 +65,7 @@ services:
     volumes:
       - hf-cache:/root/.cache/huggingface
       - sam3-video-models:/data/models
+      - ./ml-backends/sam3-video/model.py:/app/model.py:ro
     deploy:
       resources:
         reservations:

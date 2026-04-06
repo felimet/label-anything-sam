@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 MODEL_ID: str = os.getenv("SAM3_MODEL_ID", "facebook/sam3.1")
 CHECKPOINT_FILENAME: str = os.getenv("SAM3_CHECKPOINT_FILENAME", "sam3.1_multiplex.pt")
-MODEL_DIR: str = os.getenv("MODEL_DIR", "/data/models")
+MODEL_DIR: str = os.getenv("SAM3_MODEL_DIR", os.getenv("MODEL_DIR", "/data/models"))
 
 # PCS / text-prompt feature gate
 ENABLE_PCS: bool = os.getenv("SAM3_ENABLE_PCS", "true").lower() == "true"

@@ -11,14 +11,14 @@ Production-ready [Label Studio](https://labelstud.io) stack: PostgreSQL · Redis
 | `label-studio` | `heartexlabs/label-studio:20260404.151117-fb-bros-956-f3692362` | Labeling UI + API |
 | `db` | `postgres:17` | Metadata store |
 | `redis` | `redis:8.6.2` | Task queue / cache |
-| `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` ⚠️ | S3-compatible object storage |
+| `minio` | `minio/minio:RELEASE.2025-04-22T22-12-26Z` ⚠️ | S3-compatible object storage |
 | `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | One-shot bucket + CORS setup |
 | `nginx` | `nginx:1.28.3-alpine3.23` | Reverse proxy |
 | `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust tunnel |
 | `sam3-image-backend` | (custom build) | SAM3 image segmentation → BrushLabels *(GPU, optional)* |
 | `sam3-video-backend` | (custom build) | SAM3 video object tracking → VideoRectangle *(GPU, optional)* |
 
-> ⚠️ `minio/minio` repository archived 2026-02-13. `RELEASE.2025-10-15T17-29-55Z` is the final release (CVE fix). Evaluate migration to Cloudflare R2 / AWS S3 for long-term use.
+> ⚠️ `minio/minio` repository archived 2026-02-13. `RELEASE.2025-04-22T22-12-26Z` patches a privilege escalation CVE; no further updates expected. Evaluate migration to Cloudflare R2 / AWS S3 for long-term use.
 
 ## Prerequisites
 
@@ -42,7 +42,9 @@ make up                # start core stack (admin account auto-created on first b
 make init-minio        # create S3 bucket + policies
 
 # 2. Get the Label Studio API token (needed for SAM3 backends)
-#    Login → Avatar (top-right) → Account & Settings → Access Token → Copy
+#    Login → Avatar (top-right) → Account & Settings → Legacy Token → Copy
+#    ⚠ Must use Legacy Token (NOT Personal Access Token) — ML SDK sends
+#      "Authorization: Token <key>"; PAT uses JWT Bearer → 401 Unauthorized.
 
 # 3. SAM3 ML backends (optional, requires NVIDIA GPU)
 cp .env.ml.example .env.ml

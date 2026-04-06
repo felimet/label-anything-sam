@@ -12,8 +12,8 @@ Individual service health endpoints:
 
 | Service | Endpoint | Expected |
 |---------|----------|---------- |
-| Label Studio | `http://localhost:8085/health` *(dev port)* | HTTP 200 |
-| nginx | `http://localhost:8090/health` *(dev port)* | `OK` |
+| Label Studio | `http://localhost:18086/health` *(dev port)* | HTTP 200 |
+| nginx | `http://localhost:18090/health` *(dev port)* | `OK` |
 | sam3-image-backend | `http://sam3-image-backend:9090/health` *(internal)* | HTTP 200 |
 | sam3-video-backend | `http://sam3-video-backend:9090/health` *(internal)* | HTTP 200 |
 | MinIO | `mc ready local` *(via docker exec)* | `The cluster is ready` |
@@ -183,6 +183,46 @@ docker compose -f docker-compose.yml -f docker-compose.ml.yml \
 docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml \
   exec sam3-image-backend cat /app/start.sh | grep preload
 # 應該沒有輸出；若有 --preload 須移除
+```
+
+### SAM3 video backend — GPU 架構太舊 (sm_61 / Pascal)，Triton kernel 無法編譯
+
+**症狀**：video backend 啟動後第一次呼叫 predict 即失敗，log 出現大量：
+
+```
+Feature '.acq_rel' requires .target sm_70 or higher
+```
+
+加上 traceback 最後指向：
+
+```
+sam3/sam3/perflib/triton/connected_components.py::connected_components_triton
+ptxas fatal: Unsupported .target sm_61
+```
+
+**根因**：SAM3 video predictor 的 connected components 後處理是用 Triton 寫的自訂 kernel，kernel 內使用 `.acq_rel` 記憶體語意（需要 Volta 以上 `sm_70+`）。Pascal 世代（GTX 1080Ti / P40 等 `sm_61`）的 ptxas 直接拒絕編譯，與任何參數設定無關，純粹是硬體世代不符。
+
+> 為什麼 **image backend 正常**：image 推論路徑只用標準 PyTorch kernel，不碰 Triton 的 connected components，因此舊卡可以跑。
+
+**解法選項**（按推薦優先）：
+
+| 方案 | 說明 | 工程量 | 風險 |
+|------|------|--------|------|
+| 換 GPU（`sm_70+`，V100 / RTX 20xx 以後） | 官方支援路徑；換卡後照正常流程跑 | 中（硬體 + driver 更新） | 低 |
+| 改 SAM3 — 把 Triton kernel 換成 PyTorch 備援 | 偵測 `torch.cuda.get_device_capability() < (7, 0)` 時走 `scipy.ndimage.label` 或純 PyTorch 版 | 高（需理解 perflib 邏輯） | 中 |
+| 只用 image 路徑，自行實作 tracking | 用 SAM3 image 做逐 frame segmentation，tracking 改用 IoU matching / Kalman filter | 中 | 低 |
+| 改用不依賴 Triton 的 video segmentation 模型 | DeAOT / XMem / Mask2Former 等純 PyTorch 實作，對舊卡友好 | 中 | 低 |
+
+**不建議**：嘗試欺騙 ptxas 把 target 改成 `sm_70`——即使能編過，Pascal 硬體實際上不支援這些 memory ordering feature，runtime 行為不可預測。
+
+**確認你的 GPU compute capability**：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ml.yml \
+  exec sam3-video-backend python -c \
+  "import torch; print(torch.cuda.get_device_properties(0))"
+# sm_61 = Pascal (GTX 1080Ti / Titan Xp 等) → 無法跑 SAM3 video
+# sm_70+ = Volta 以後 → OK
 ```
 
 ### SAM3 backend — CUDA out of memory

@@ -3,8 +3,8 @@
   ======================================================
   Prompts (可組合使用，觸發 smart predict):
     - VideoRectangle : 在目標畫格拉矩形框 → SAM3 向前追蹤
-    - KeyPointLabels : 正向點 (Object) / 負向點 (background) → 點 prompt
     - TextArea       : 文字 prompt → SAM3 PCS open-vocabulary 追蹤
+  Note: KeyPointLabels 不支援 Video toName，已移除。
 
   Label name note:
     Label name (e.g., "car", "person") is used as SAM3 text concept prompt.
@@ -81,17 +81,6 @@
       <span title="1. 點選工具列的 auto（⚡）圖示啟用 smart 模式。&#10;2. 在目標畫格拖拉矩形框住物件。&#10;3. SAM3 自動向前追蹤至&#10;   MAX_FRAMES_TO_TRACK 張畫格。">Box Prompt</span>
     </HyperText>
     <VideoRectangle name="box" toName="video" smart="true"/>
-  </View>
-
-  <!-- Prompt: positive / negative keypoints on target frame -->
-  <View className="sam3-section">
-    <HyperText name="h_kp" value="" className="sam3-label" inline="true">
-      <span title="1. 點選工具列的 auto（⚡）圖示啟用 smart 模式。&#10;2. 選 Object（正向）或 background（負向）。&#10;3. 點擊目標畫格上的位置。&#10;&#10;與 Box Prompt 組合使用效果更佳。">Keypoint Prompt</span>
-    </HyperText>
-    <KeyPointLabels name="kp" toName="video" smart="true">
-      <Label value="Object"     smart="true" background="#250dd3" showInline="true"/>
-      <Label value="background" smart="true" background="#555555" showInline="true"/>
-    </KeyPointLabels>
   </View>
 
   <!-- Track labels -->

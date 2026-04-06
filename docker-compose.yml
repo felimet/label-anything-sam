@@ -58,9 +58,7 @@ services:
 
   # ── MinIO ───────────────────────────────────────────────────
   minio:
-    # WARNING: minio/minio repo archived 2026-02-13. No future updates.
-    # NOTE: RELEASE.2025-10-15T17-29-55Z patches a privilege escalation CVE; update if security is a concern.
-    image: "minio/minio:${MINIO_VERSION:-RELEASE.2025-09-07T16-13-09Z}"
+    image: "minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}"
     restart: unless-stopped
     logging: *default-logging
     command: server /data --console-address ":9001"
@@ -69,7 +67,9 @@ services:
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       # External domain — presigned URLs will use this base
       - MINIO_SERVER_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}
-      - MINIO_BROWSER_REDIRECT_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}/ui/
+      # MINIO_BROWSER_REDIRECT_URL removed: setting this disables the embedded console,
+      # causing MinIO to serve a redirect stub that fails to load its own JS (all paths
+      # return text/html + nosniff → React never initialises → blank page).
       # CORS — allow browser uploads via presigned URLs.
       # S3 PutBucketCors API was removed from MinIO open source; use server-level config.
       - MINIO_API_CORS_ALLOW_ORIGIN=*
