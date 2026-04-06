@@ -41,14 +41,14 @@ make health
 Dev override ports ([docker-compose.override.yml](../docker-compose.override.yml)):
 
 <!-- AUTO-GENERATED from docker-compose.override.yml -->
-| Service | Host port |
-|---------|-----------|
-| nginx | 18090 |
-| label-studio | 18086 |
-| minio API | 19000 |
-| minio console | 19001 |
-| postgres | 5433 |
-| redis | 6380 |
+| Service | Host port | Notes |
+|---------|-----------|-------|
+| nginx | 18090 | Label Studio 反向代理入口 |
+| label-studio | 18086 | Django 應用直連（繞過 nginx） |
+| minio API | 19000 | S3 端點（`aws s3`、SDK、presigned URL） |
+| minio console | 19001 | MinIO 後台管理 UI（`http://localhost:19001`） |
+| postgres | 5433 | 避免與本機 PostgreSQL 衝突 |
+| redis | 6380 | 避免與本機 Redis 衝突 |
 <!-- END AUTO-GENERATED -->
 
 > **Windows 注意**：8000–9000 附近的 port 常被 Hyper-V 保留；若 bind 失敗改用 18000+ 範圍。

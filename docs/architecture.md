@@ -89,14 +89,14 @@ sequenceDiagram
 
 本機開發（`docker-compose.override.yml`）額外暴露：
 
-| 服務 | 主機埠號 |
-|------|----------|
-| nginx | 18090 |
-| label-studio | 18086 |
-| minio API | 19000 |
-| minio console | 19001 |
-| postgres | 5433 |
-| redis | 6380 |
+| 服務 | 主機埠號 | 說明 |
+|------|----------|------|
+| nginx | 18090 | Label Studio 反向代理入口 |
+| label-studio | 18086 | Django 應用直連（繞過 nginx） |
+| minio API | 19000 | S3 端點（`aws s3`、SDK、presigned URL） |
+| minio console | 19001 | MinIO 後台管理 UI（`http://localhost:19001`） |
+| postgres | 5433 | 避免與本機 PostgreSQL 衝突 |
+| redis | 6380 | 避免與本機 Redis 衝突 |
 
 ## SAM3 ML 疊加層
 
