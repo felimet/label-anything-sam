@@ -29,13 +29,15 @@
 | `MINIO_BUCKET` | `label-studio-bucket` | 儲存桶名稱；由 `make init-minio` 自動建立 |
 | `MINIO_EXTERNAL_HOST` | `minio.example.com` | 對外公開網域；嵌入 Presigned URL |
 
+> **CORS**：MinIO 開源版已移除 S3 `PutBucketCors` API。CORS 改由 docker-compose.yml 的 `MINIO_API_CORS_ALLOW_ORIGIN=*` 環境變數控制，無需在 `make init-minio` 中設定。
+
 > **重要：** `MINIO_EXTERNAL_HOST` 必須可從瀏覽器端解析。MinIO 用此值產生 Presigned URL，Label Studio 內部請求仍走 `http://minio:9000`。
 
 ## Label Studio
 
 | 變數 | 範例 | 說明 |
 |------|------|------|
-| `LABEL_STUDIO_HOST` | `https://label-studio.example.com` | 對外公開 URL；用於 CSRF 信任來源 |
+| `LABEL_STUDIO_HOST` | `https://label-studio.example.com` | 對外公開 URL；同時作為 `CSRF_TRUSTED_ORIGINS` 的值（需含 `https://`） |
 | `LABEL_STUDIO_SECRET_KEY` | `openssl rand -hex 32` | Django Session 金鑰 |
 | `LABEL_STUDIO_USERNAME` | `admin@example.com` | 初始管理員 Email |
 | `LABEL_STUDIO_PASSWORD` | — | 初始管理員密碼 |
@@ -51,6 +53,13 @@
 
 - **全新部署**：在 `.env` 填好後直接 `docker compose up -d`，admin 帳號與 token 均自動寫入。
 - **已跑過 stack**：透過 LS UI（Settings → Access Tokens）手動建立 token，並填入 `.env` 的 `LABEL_STUDIO_API_KEY`；或 `docker compose down -v` 重置資料庫（**⚠️ 會刪除所有標注資料**）。
+
+### CSRF 設定說明
+
+Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF_TRUSTED_ORIGINS`）。
+值必須含 scheme，例如 `https://label-studio.example.com`，否則登入時會出現 **403 CSRF verification failed**。
+
+此值由 docker-compose.yml 自動從 `LABEL_STUDIO_HOST` 繼承，無需額外設定。
 
 ### `LABEL_STUDIO_ENABLE_LEGACY_API_TOKEN`
 

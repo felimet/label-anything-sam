@@ -105,6 +105,42 @@ docker compose up -d db
 docker compose logs -f db  # wait for "database system is ready"
 ```
 
+### Label Studio 登入 403 CSRF verification failed
+
+原因：nginx 的 `X-Forwarded-Proto` 送出 `http`（Cloudflare Tunnel 以 HTTP 連到 nginx），Django CSRF 與瀏覽器的 HTTPS Origin 不符。
+
+確認 nginx 設定是否已套用：
+```bash
+docker compose exec nginx grep -r "X-Forwarded-Proto" /etc/nginx/conf.d/
+# 應顯示: proxy_set_header   X-Forwarded-Proto https;
+```
+
+若未套用（`$scheme` 而非 `https`）：
+```bash
+docker compose up -d --no-deps nginx
+```
+
+同時確認 `LABEL_STUDIO_HOST` 含 `https://` 前綴（影響 `CSRF_TRUSTED_ORIGINS`）。
+
+### 首次登入帳號不存在 / 登入後 500 "No memberships found"
+
+`DEFAULT_USERNAME`/`DEFAULT_USER_PASSWORD` 只在 Postgres DB **首次初始化**時生效。若 DB 已存在，需手動建立：
+
+```bash
+docker compose exec label-studio bash -c '
+cd /label-studio
+python label_studio/manage.py shell -c "
+from django.contrib.auth import get_user_model
+from organizations.models import Organization
+U = get_user_model()
+user = U.objects.create_superuser(email=\"admin@example.com\", password=\"your_password\")
+Organization.create_organization(created_by=user, title=\"Default\")
+print(\"Done\")
+"'
+```
+
+> 若 DB 已存在但帳號不存在（如重建容器未 `down -v`），執行上述指令即可；Organization 建立後才能正常登入。
+
 ### MinIO bucket not found
 
 ```bash

@@ -35,14 +35,18 @@ make health
 
 Dev override ports ([docker-compose.override.yml](../docker-compose.override.yml)):
 
+<!-- AUTO-GENERATED from docker-compose.override.yml -->
 | Service | Host port |
 |---------|-----------|
-| nginx | 8090 |
-| label-studio | 8085 |
+| nginx | 18090 |
+| label-studio | 18086 |
 | minio API | 19000 |
 | minio console | 19001 |
 | postgres | 5433 |
 | redis | 6380 |
+<!-- END AUTO-GENERATED -->
+
+> **Windows 注意**：8000–9000 附近的 port 常被 Hyper-V 保留；若 bind 失敗改用 18000+ 範圍。
 
 ## Available Commands
 

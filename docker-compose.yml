@@ -130,8 +130,9 @@ services:
       # Cloudflare Tunnel forwards real IP/host via headers
       - USE_X_FORWARDED_HOST=true
       - USE_X_FORWARDED_PORT=true
-      # Trust CF Tunnel's forwarded headers
-      - DJANGO_CSRF_TRUSTED_ORIGINS=${LABEL_STUDIO_HOST}
+      # Label Studio reads CSRF_TRUSTED_ORIGINS (not DJANGO_CSRF_TRUSTED_ORIGINS)
+      # see label_studio/core/settings/base.py: get_env('CSRF_TRUSTED_ORIGINS', [])
+      - CSRF_TRUSTED_ORIGINS=${LABEL_STUDIO_HOST}
       # Storage — disable SSRF protection for internal MinIO calls
       - SSRF_PROTECTION_ENABLED=false
       - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
@@ -149,7 +150,7 @@ services:
       - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=${LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK:-true}
       # Initial admin (only used on first run)
       - DEFAULT_USERNAME=${LABEL_STUDIO_USERNAME:-admin@example.com}
-      - DEFAULT_USER_PASSWORD=${LABEL_STUDIO_PASSWORD}
+      - DEFAULT_USER_PASSWORD=${LABEL_STUDIO_PASSWORD:-admin_ps_example}
       # Logging
       - DJANGO_LOG_LEVEL=WARNING
       - LOG_LEVEL=WARNING
