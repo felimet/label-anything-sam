@@ -11,14 +11,14 @@
 | `label-studio` | `heartexlabs/label-studio:20260404.151117-fb-bros-956-f3692362` | 標注 UI + API |
 | `db` | `postgres:17` | 資料庫 |
 | `redis` | `redis:8.6.2` | 任務佇列 / 快取 |
-| `minio` | `minio/minio:RELEASE.2025-09-07T16-13-09Z` ⚠️ | S3 相容物件儲存 |
+| `minio` | `minio/minio:RELEASE.2025-04-22T22-12-26Z` ⚠️ | S3 相容物件儲存 |
 | `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | 一次性 bucket + CORS 初始化 |
 | `nginx` | `nginx:1.28.3-alpine3.23` | 反向代理 |
 | `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust Tunnel |
 | `sam3-image-backend` | (自訂建置) | SAM3 影像分割 → BrushLabels *(需 GPU，可選)* |
 | `sam3-video-backend` | (自訂建置) | SAM3 影片物件追蹤 → VideoRectangle *(需 GPU，可選)* |
 
-> ⚠️ `minio/minio` 儲存庫已於 2026-02-13 封存，不再更新。`RELEASE.2025-10-15T17-29-55Z` 為最終版本（CVE 安全修補）。長期使用建議評估遷移至 Cloudflare R2 或 AWS S3。
+> ⚠️ `minio/minio` 儲存庫已於 2026-02-13 封存，不再更新。`RELEASE.2025-04-22T22-12-26Z` 修補一個權限提升 CVE；長期使用建議評估遷移至 Cloudflare R2 或 AWS S3。
 
 ## 前置需求
 
@@ -32,15 +32,25 @@
 ```bash
 git clone https://github.com/felimet/label-studio-compose
 cd label-studio-compose
+
+# 1. 核心服務
 cp .env.example .env
 $EDITOR .env           # 填入所有 <PLACEHOLDER> 值
-                       # 設定 LABEL_STUDIO_USER_TOKEN=$(openssl rand -hex 32)
-                       # 設定 LABEL_STUDIO_API_KEY（專用的 sam3 服務 token，與 USER_TOKEN 分開）
+                       # LABEL_STUDIO_USER_TOKEN: openssl rand -hex 20（必須 ≤40 字元）
 
 make up                # 啟動核心服務（管理員帳號於首次啟動時自動建立）
 make init-minio        # 建立 S3 儲存桶 + 存取政策
 
-make ml-up             # （可選）啟動 SAM3 影像 + 影片後端（需 GPU）
+# 2. 取得 Label Studio API Token（SAM3 後端需要）
+#    登入 → 右上角頭像 → Account & Settings → Legacy Token → 複製
+#    ⚠ 必須使用 Legacy Token（不可用 Personal Access Token）——ML SDK 傳送
+#      "Authorization: Token <key>"；PAT 使用 JWT Bearer → 401 Unauthorized。
+
+# 3. SAM3 ML 後端（可選，需 NVIDIA GPU）
+cp .env.ml.example .env.ml
+$EDITOR .env.ml        # 填入 LABEL_STUDIO_API_KEY（步驟 2）及 HF_TOKEN
+
+make ml-up
 ```
 
 在 Label Studio 中連接 MinIO 儲存：
