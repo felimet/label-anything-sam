@@ -32,15 +32,23 @@ Production-ready [Label Studio](https://labelstud.io) stack: PostgreSQL · Redis
 ```bash
 git clone https://github.com/felimet/label-studio-compose
 cd label-studio-compose
+
+# 1. Core stack
 cp .env.example .env
 $EDITOR .env           # fill every <PLACEHOLDER>
-                       # set LABEL_STUDIO_USER_TOKEN=<openssl rand -hex 32>
-                       # set LABEL_STUDIO_API_KEY separately (dedicated service token)
+                       # LABEL_STUDIO_USER_TOKEN: openssl rand -hex 20  (must be ≤40 chars)
 
 make up                # start core stack (admin account auto-created on first boot)
 make init-minio        # create S3 bucket + policies
 
-make ml-up             # (optional) start SAM3 image + video backends on GPU
+# 2. Get the Label Studio API token (needed for SAM3 backends)
+#    Login → Avatar (top-right) → Account & Settings → Access Token → Copy
+
+# 3. SAM3 ML backends (optional, requires NVIDIA GPU)
+cp .env.ml.example .env.ml
+$EDITOR .env.ml        # set LABEL_STUDIO_API_KEY (from step 2) and HF_TOKEN
+
+make ml-up
 ```
 
 Connect MinIO storage in Label Studio:

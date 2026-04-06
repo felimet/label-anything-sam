@@ -3,6 +3,7 @@
 
 # Secrets — NEVER commit
 .env
+.env.ml
 
 # Runtime data volumes
 data/
