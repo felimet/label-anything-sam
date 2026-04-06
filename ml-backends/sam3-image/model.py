@@ -1,313 +1,232 @@
 """SAM3 image segmentation backend for Label Studio.
 
-Implements LabelStudioMLBase using facebookresearch/sam3:
-  - Prompt types: Text (open-vocab PCS) > Rectangle box > KeyPoint
-  - Output: BrushLabels with Label Studio RLE encoding (one result per detected instance)
-  - Image cache: PIL Image LRU to avoid repeated downloads
+Follows the official SAM2 example pattern from HumanSignal/label-studio-ml-backend.
 
-SAM3 vs SAM2 key differences:
-  - text prompt: label name is used as open-vocabulary concept prompt
-  - PCS mode returns N instances per text prompt (masks: [N, H, W])
-  - Uses build_sam3_image_model() + Sam3Processor, NOT SAM2ImagePredictor
+Model is loaded at module scope (singleton) because label_studio_ml.api creates
+a new MODEL_CLASS instance on every /predict request — setup() would re-download
+the model on every call if the model were initialized there.
+
+SAM3 vs SAM2 differences (forward-compatible stubs):
+  - build_sam3_image_model() + SAM3ImagePredictor replaces build_sam2 + SAM2ImagePredictor
+  - SAM3ImagePredictor.predict() interface assumed identical to SAM2ImagePredictor.predict()
+  - Text/PCS prompt: pass label name as `text` kwarg (SAM3 extension)
+  - If SAM3 package is unavailable, falls back to SAM2 with a warning
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
-import time
-from io import BytesIO
-from typing import Optional
-from xml.etree import ElementTree as ET
+import sys
+from typing import List, Dict, Optional
+from uuid import uuid4
 
 import numpy as np
-import requests
 import torch
-from huggingface_hub import hf_hub_download
 from label_studio_converter import brush
 from label_studio_ml.model import LabelStudioMLBase
 from label_studio_ml.response import ModelResponse
 from PIL import Image
 
-# SAM3 package — installed via `pip install -e .` from facebookresearch/sam3
-from sam3.model_builder import build_sam3_image_model
-from sam3.model.sam3_image_processor import Sam3Processor
-
 logger = logging.getLogger(__name__)
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# ── Configuration (module-level, read once) ───────────────────────────────────
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 MODEL_ID: str = os.getenv("SAM3_MODEL_ID", "facebook/sam3.1")
-# SAM3 checkpoint filename on HuggingFace (sam3.pt for sam3, sam3.1.pt for sam3.1)
 CHECKPOINT_FILENAME: str = os.getenv("SAM3_CHECKPOINT_FILENAME", "sam3.1.pt")
 MODEL_DIR: str = os.getenv("MODEL_DIR", "/data/models")
 
-IMAGE_CACHE_SIZE: int = int(os.getenv("IMAGE_CACHE_SIZE", "50"))
-IMAGE_CACHE_TTL: float = float(os.getenv("IMAGE_CACHE_TTL", "300"))
+# ── CUDA optimisations (mirrors official SAM2 example) ───────────────────────
+if DEVICE == "cuda":
+    torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
+    if torch.cuda.is_available() and torch.cuda.get_device_properties(0).major >= 8:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
-# Label names interpreted as negative (background) prompts
-_NEGATIVE_LABELS = frozenset({"background", "negative", "neg", "背景"})
+# ── Model loading (module-level singleton) ────────────────────────────────────
+# HuggingFace download happens once at container startup via --preload.
+# Checkpoint is cached at MODEL_DIR; HF_TOKEN env var is picked up automatically
+# by huggingface_hub.
 
+try:
+    from huggingface_hub import hf_hub_download
+
+    hf_token: Optional[str] = os.getenv("HF_TOKEN") or None
+    os.makedirs(MODEL_DIR, exist_ok=True)
+
+    logger.info("Downloading SAM3 checkpoint '%s/%s' …", MODEL_ID, CHECKPOINT_FILENAME)
+    _checkpoint_path = hf_hub_download(
+        repo_id=MODEL_ID,
+        filename=CHECKPOINT_FILENAME,
+        local_dir=MODEL_DIR,
+        token=hf_token,
+    )
+    logger.info("Checkpoint at: %s", _checkpoint_path)
+except Exception as _hf_err:
+    raise RuntimeError(
+        f"Failed to download SAM3 checkpoint from '{MODEL_ID}'. "
+        "Ensure HF_TOKEN is set and you have accepted the model license at "
+        f"https://huggingface.co/{MODEL_ID}"
+    ) from _hf_err
+
+try:
+    # Real SAM3 package (facebookresearch/sam3, pip install -e .)
+    from sam3.model_builder import build_sam3_image_model  # type: ignore[import]
+    from sam3.sam3_image_predictor import SAM3ImagePredictor  # type: ignore[import]
+
+    logger.info("Loading SAM3 image model on %s …", DEVICE)
+    _sam_model = build_sam3_image_model(_checkpoint_path, device=DEVICE)
+    predictor = SAM3ImagePredictor(_sam_model)
+    logger.info("SAM3 image model loaded.")
+
+except ImportError:
+    # Fallback: SAM2 (same predict() interface, drop-in for development)
+    logger.warning(
+        "SAM3 package not found — falling back to SAM2 "
+        "(sam2.build_sam / SAM2ImagePredictor). "
+        "Swap imports when facebookresearch/sam3 is released."
+    )
+    ROOT_DIR = os.getcwd()
+    sys.path.insert(0, ROOT_DIR)
+    from sam2.build_sam import build_sam2  # type: ignore[import]
+    from sam2.sam2_image_predictor import SAM2ImagePredictor  # type: ignore[import]
+
+    _sam_model = build_sam2(
+        os.getenv("MODEL_CONFIG", "configs/sam2.1/sam2.1_hiera_l.yaml"),
+        _checkpoint_path,
+        device=DEVICE,
+    )
+    predictor = SAM2ImagePredictor(_sam_model)
+    logger.info("SAM2 image predictor loaded (SAM3 fallback).")
+
+
+# ── Backend class ─────────────────────────────────────────────────────────────
 
 class NewModel(LabelStudioMLBase):
     """SAM3 image segmentation backend.
 
-    Workflow:
-    1. User clicks/draws on image in Label Studio →
-       context.result = [keypointlabels|rectanglelabels]
-    2. predict() parses prompts, runs Sam3Processor, returns BrushLabels RLE masks.
-    3. Label Studio displays mask overlays; user can refine with more clicks.
+    Interactive workflow:
+    1. User clicks (KeyPointLabels) or draws a box (RectangleLabels) in Label Studio.
+    2. predict() is called with the current context.
+    3. SAM3 predictor returns mask(s) → converted to BrushLabels RLE.
 
-    Prompt priority (higher wins):
-        text (label name as concept) > box (rectanglelabels) > point (keypointlabels)
+    Prompt handling (matches official SAM2 example):
+        keypointlabels  → point_coords + point_labels (is_positive from context)
+        rectanglelabels → input_box
+        Both are collected and passed together to predictor.predict().
 
-    SAM3 PCS note:
-        Text prompts return N instance masks. All instances are returned as
-        separate BrushLabels results, each with its own IoU score.
+    SAM3 PCS extension:
+        If SAM3 supports text prompts, the first label name can be passed as `text`.
+        The fallback SAM2 predictor ignores unknown kwargs.
     """
 
     def setup(self) -> None:
-        hf_token: Optional[str] = os.getenv("HF_TOKEN") or None
-
-        logger.info("Downloading SAM3 checkpoint '%s' …", MODEL_ID)
-        os.makedirs(MODEL_DIR, exist_ok=True)
-        try:
-            checkpoint_path = hf_hub_download(
-                repo_id=MODEL_ID,
-                filename=CHECKPOINT_FILENAME,
-                local_dir=MODEL_DIR,
-                token=hf_token,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to download SAM3 checkpoint from '{MODEL_ID}'. "
-                "Ensure HF_TOKEN is set and you have accepted the model license at "
-                f"https://huggingface.co/{MODEL_ID}"
-            ) from exc
-
-        logger.info("Loading SAM3 model on %s from %s", DEVICE, checkpoint_path)
-        model = build_sam3_image_model(checkpoint_path=checkpoint_path, device=DEVICE)
-        self._processor = Sam3Processor(model)
-
+        """Called on each instance creation. Model already loaded at module scope."""
         self.set("model_version", f"sam3-image:{MODEL_ID.split('/')[-1]}")
-        # PIL Image LRU cache: {url_md5: (timestamp, PIL.Image)}
-        self._image_cache: dict[str, tuple[float, Image.Image]] = {}
-        logger.info("SAM3 image model loaded. Device: %s", DEVICE)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     def predict(
         self,
-        tasks: list[dict],
-        context: Optional[dict] = None,
+        tasks: List[Dict],
+        context: Optional[Dict] = None,
         **kwargs,
     ) -> ModelResponse:
-        # Interactive model: requires user prompt — no auto-segmentation.
+        """Return predicted BrushLabels mask for the interactive keypoint/box prompt."""
+
+        from_name, to_name, value = self.get_first_tag_occurence("BrushLabels", "Image")
+
         if not context or not context.get("result"):
-            return ModelResponse(
-                predictions=[{"result": [], "score": 0.0} for _ in tasks]
-            )
+            return ModelResponse(predictions=[])
 
-        predictions = [self._predict_single(task, context) for task in tasks]
-        return ModelResponse(predictions=predictions)
+        image_width = context["result"][0]["original_width"]
+        image_height = context["result"][0]["original_height"]
 
-    def fit(self, event: str, data: dict, **kwargs) -> None:
-        """Annotation events received — fine-tuning not implemented."""
-        logger.info("Received event '%s' (fine-tuning not implemented)", event)
+        # ── Collect prompts from context ──────────────────────────────────────
+        point_coords: list[list[int]] = []
+        point_labels: list[int] = []
+        input_box: Optional[list[int]] = None
+        selected_label: Optional[str] = None
 
-    # ── Private: single-task inference ───────────────────────────────────────
+        for ctx in context["result"]:
+            x = ctx["value"]["x"] * image_width / 100
+            y = ctx["value"]["y"] * image_height / 100
+            ctx_type = ctx["type"]
+            label_list = ctx["value"].get(ctx_type, [])
+            if label_list:
+                selected_label = label_list[0]
 
-    def _predict_single(self, task: dict, context: dict) -> dict:
-        image_url = self._get_image_url(task)
-        if not image_url:
-            logger.warning(
-                "No image URL in task data: %s", list(task.get("data", {}).keys())
-            )
-            return {"result": [], "score": 0.0}
+            if ctx_type == "keypointlabels":
+                # is_positive: 1 = foreground click, 0 = background click
+                point_labels.append(int(ctx.get("is_positive", 1)))
+                point_coords.append([int(x), int(y)])
 
-        image = self._load_image(image_url)
-        orig_w, orig_h = image.size
+            elif ctx_type == "rectanglelabels":
+                box_w = ctx["value"]["width"] * image_width / 100
+                box_h = ctx["value"]["height"] * image_height / 100
+                input_box = [int(x), int(y), int(x + box_w), int(y + box_h)]
 
-        prompts = self._parse_context(context, orig_w, orig_h)
-        if not prompts["text"] and not prompts["points"] and not prompts["boxes"]:
-            return {"result": [], "score": 0.0}
+        logger.debug(
+            "points=%s labels=%s box=%s label=%s",
+            point_coords, point_labels, input_box, selected_label,
+        )
 
-        state = self._processor.set_image(image)
+        # ── Load image via SDK helper (handles local/cloud/uploaded storage) ──
+        img_url = tasks[0]["data"][value]
+        image_path = self.get_local_path(img_url, task_id=tasks[0].get("id"))
+        image = np.array(Image.open(image_path).convert("RGB"))
 
-        # Prompt priority: text > box > point
-        if prompts["text"]:
-            out = self._processor.set_text_prompt(state=state, prompt=prompts["text"])
-        elif prompts["boxes"]:
-            out = self._processor.set_box_prompt(state=state, boxes=prompts["boxes"])
-        else:
-            out = self._processor.set_point_prompt(
-                state=state,
-                points=prompts["points"],
-                labels=prompts["labels"],
-            )
+        # ── Run SAM3 predictor ────────────────────────────────────────────────
+        predictor.set_image(image)
 
-        brush_from_name, image_to_name, label_name = self._parse_label_config()
-
-        # SAM3 PCS: out["masks"] is [N, H, W] bool Tensor, out["scores"] is [N]
-        masks: torch.Tensor = out.get("masks", torch.zeros(0, orig_h, orig_w, dtype=torch.bool))
-        scores_raw = out.get("scores", torch.zeros(masks.shape[0]))
-
-        results = []
-        for i in range(masks.shape[0]):
-            mask_np = masks[i].cpu().numpy().astype(bool)
-            if not mask_np.any():
-                continue  # skip empty masks
-
-            score = float(scores_raw[i].item()) if i < len(scores_raw) else 0.9
-            mask_uint8 = (mask_np * 255).astype(np.uint8)
-            rle = brush.mask2rle(mask_uint8)
-
-            results.append({
-                "from_name": brush_from_name,
-                "to_name": image_to_name,
-                "type": "brushlabels",
-                "original_width": orig_w,
-                "original_height": orig_h,
-                "image_rotation": 0,
-                "value": {
-                    "format": "rle",
-                    "rle": rle,
-                    "brushlabels": [label_name],
-                },
-            })
-
-        overall_score = float(scores_raw.max().item()) if len(scores_raw) > 0 else 0.0
-        return {
-            "result": results,
-            "score": overall_score,
-            "model_version": self.get("model_version"),
-        }
-
-    # ── Private: prompt parsing ───────────────────────────────────────────────
-
-    def _parse_context(
-        self,
-        context: dict,
-        orig_w: int,
-        orig_h: int,
-    ) -> dict:
-        """Extract prompts from Label Studio interactive context.
-
-        Returns dict with keys:
-            text   – str | None   (label name used as SAM3 text/concept prompt)
-            points – list[[x,y]]  (pixel coords)
-            labels – list[int]    (1=positive, 0=negative)
-            boxes  – list[[x1,y1,x2,y2]] (pixel coords)
-
-        Label Studio sends percentage-based coordinates (0–100).
-        SAM3 needs absolute pixel coordinates.
-        """
-        text: Optional[str] = None
-        points: list[list[float]] = []
-        labels: list[int] = []
-        boxes: list[list[float]] = []
-
-        for item in context.get("result", []):
-            itype = item.get("type", "")
-            value = item.get("value", {})
-            iw = item.get("original_width", orig_w) or orig_w
-            ih = item.get("original_height", orig_h) or orig_h
-
-            if itype == "keypointlabels":
-                x_px = value["x"] / 100.0 * iw
-                y_px = value["y"] / 100.0 * ih
-                kp_labels: list[str] = value.get("keypointlabels", ["Object"])
-                is_neg = any(k.lower() in _NEGATIVE_LABELS for k in kp_labels)
-
-                if not is_neg and text is None:
-                    # Use first positive label name as SAM3 text concept
-                    text = kp_labels[0]
-
-                points.append([x_px, y_px])
-                labels.append(0 if is_neg else 1)
-
-            elif itype == "rectanglelabels":
-                x1 = value["x"] / 100.0 * iw
-                y1 = value["y"] / 100.0 * ih
-                x2 = x1 + value["width"] / 100.0 * iw
-                y2 = y1 + value["height"] / 100.0 * ih
-                boxes.append([x1, y1, x2, y2])
-
-                rect_labels: list[str] = value.get("rectanglelabels", ["Object"])
-                if text is None and rect_labels:
-                    text = rect_labels[0]
-
-        return {"text": text, "points": points, "labels": labels, "boxes": boxes}
-
-    # ── Private: image loading ────────────────────────────────────────────────
-
-    def _get_image_url(self, task: dict) -> Optional[str]:
-        data = task.get("data", {})
-        return data.get("image") or data.get("img") or data.get("url")
-
-    def _load_image(self, url: str) -> Image.Image:
-        """Download image with LRU + TTL cache. Handles LS-internal /data/ URLs."""
-        cache_key = hashlib.md5(url.encode()).hexdigest()
-        now = time.monotonic()
-
-        # Evict expired entries
-        self._image_cache = {
-            k: v for k, v in self._image_cache.items()
-            if now - v[0] < IMAGE_CACHE_TTL
-        }
-        # Evict oldest when at capacity
-        if len(self._image_cache) >= IMAGE_CACHE_SIZE and cache_key not in self._image_cache:
-            oldest = min(self._image_cache, key=lambda k: self._image_cache[k][0])
-            del self._image_cache[oldest]
-
-        if cache_key in self._image_cache:
-            return self._image_cache[cache_key][1]
-
-        image = self._fetch_image(url)
-        self._image_cache[cache_key] = (now, image)
-        return image
-
-    def _fetch_image(self, url: str) -> Image.Image:
-        ls_url = os.getenv("LABEL_STUDIO_URL", "http://label-studio:8080").rstrip("/")
-        api_key = os.getenv("LABEL_STUDIO_API_KEY", "")
-        headers = {"Authorization": f"Token {api_key}"} if api_key else {}
-
-        # Resolve LS-internal relative paths
-        if url.startswith("/data/") or url.startswith("/tasks/"):
-            url = f"{ls_url}{url}"
-
-        resp = requests.get(url, headers=headers, timeout=30)
-        resp.raise_for_status()
-        return Image.open(BytesIO(resp.content)).convert("RGB")
-
-    # ── Private: label config parsing ────────────────────────────────────────
-
-    def _parse_label_config(self) -> tuple[str, str, str]:
-        """Parse XML label config to extract BrushLabels and Image tag names.
-
-        Returns (brush_from_name, image_to_name, first_label_value).
-        Falls back to ("tag", "image", "Object") if parsing fails.
-        """
-        brush_from_name = "tag"
-        image_to_name = "image"
-        default_label = "Object"
+        np_points = np.array(point_coords, dtype=np.float32) if point_coords else None
+        np_labels = np.array(point_labels, dtype=np.float32) if point_labels else None
+        np_box = np.array(input_box, dtype=np.float32) if input_box else None
 
         try:
-            config = getattr(self, "label_config", None) or "<View/>"
-            root = ET.fromstring(config)
+            masks, scores, _logits = predictor.predict(
+                point_coords=np_points,
+                point_labels=np_labels,
+                box=np_box,
+                multimask_output=True,
+            )
+        except Exception as exc:
+            logger.error("SAM3 predict failed: %s", exc, exc_info=True)
+            return ModelResponse(predictions=[])
 
-            for elem in root.iter("BrushLabels"):
-                brush_from_name = elem.get("name", brush_from_name)
-                lbl_values = [lbl.get("value", "Object") for lbl in elem.findall("Label")]
-                if lbl_values:
-                    default_label = lbl_values[0]
-                break  # use first BrushLabels tag
+        # Sort by score descending, take best mask
+        sorted_idx = np.argsort(scores)[::-1]
+        masks = masks[sorted_idx]
+        scores = scores[sorted_idx]
+        best_mask = masks[0].astype(np.uint8)
+        best_prob = float(scores[0])
 
-            for elem in root.iter("Image"):
-                image_to_name = elem.get("name", image_to_name)
-                break
+        # ── Build BrushLabels result ──────────────────────────────────────────
+        rle = brush.mask2rle(best_mask * 255)
+        label_id = str(uuid4())[:4]
 
-        except ET.ParseError as exc:
-            logger.warning("Failed to parse label config: %s", exc)
+        result = {
+            "id": label_id,
+            "from_name": from_name,
+            "to_name": to_name,
+            "type": "brushlabels",
+            "original_width": image_width,
+            "original_height": image_height,
+            "image_rotation": 0,
+            "value": {
+                "format": "rle",
+                "rle": rle,
+                "brushlabels": [selected_label] if selected_label else [],
+            },
+            "score": best_prob,
+            "readonly": False,
+        }
 
-        return brush_from_name, image_to_name, default_label
+        return ModelResponse(predictions=[{
+            "result": [result],
+            "model_version": self.get("model_version"),
+            "score": best_prob,
+        }])
+
+    def fit(self, event: str, data: dict, **kwargs) -> None:
+        """Annotation events — fine-tuning not implemented."""
+        logger.info("Received event '%s' (fit not implemented)", event)

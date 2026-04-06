@@ -1,30 +1,10 @@
-# ── PyTorch ───────────────────────────────────────────────────
-# Installed separately in Dockerfile via cu126 index URL.
-# Not listed here to avoid index conflict.
+# PyTorch: installed via pytorch/pytorch base image in Dockerfile.
+# SAM3: installed via `pip install -e /sam3` in Dockerfile.
+# label-studio-ml: in requirements-base.txt (git install).
 
-# ── SAM3 ──────────────────────────────────────────────────────
-# Installed via `pip install -e .` from facebookresearch/sam3 (git clone in Dockerfile).
-# No PyPI package; source install required.
-
-# ── HuggingFace ──────────────────────────────────────────────
 huggingface_hub>=0.27.0
-
-# ── Image processing ─────────────────────────────────────────
 Pillow>=10.3.0
 numpy>=1.26.0,<2.0.0
-
-# ── Label Studio SDK ─────────────────────────────────────────
-# label-studio-ml is installed from git in Dockerfile — do NOT list here.
-# Listing it would cause pip to overwrite the VCS install with PyPI on
-# a plain `pip install -r requirements.txt` invocation.
 label-studio-sdk>=1.0.0
-# RLE encoding for BrushLabels (Label Studio custom format, NOT COCO RLE)
 label-studio-converter>=0.0.57
-# rq (Redis Queue) — used by label_studio_ml.api; not always pulled transitively
-rq>=1.16.0
-
-# ── HTTP client ──────────────────────────────────────────────
 requests>=2.32.0
-
-# ── Server ───────────────────────────────────────────────────
-gunicorn>=22.0.0
