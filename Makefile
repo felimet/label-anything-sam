@@ -22,27 +22,27 @@ ps:
 	docker compose ps
 
 # ─── ML Backends (SAM3 image + video) ───────────────────────
+# override.yml must be included explicitly when using -f flags
+# (Docker Compose only auto-loads override.yml when no -f is specified)
+ML_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml
+
 ml-up:
-	docker compose -f docker-compose.yml -f docker-compose.ml.yml up -d
+	$(ML_COMPOSE) up -d
 
 ml-down:
-	docker compose -f docker-compose.yml -f docker-compose.ml.yml down
+	$(ML_COMPOSE) down
 
 build-sam3-image:
-	docker compose -f docker-compose.yml -f docker-compose.ml.yml \
-		build sam3-image-backend
+	$(ML_COMPOSE) build sam3-image-backend
 
 build-sam3-video:
-	docker compose -f docker-compose.yml -f docker-compose.ml.yml \
-		build sam3-video-backend
+	$(ML_COMPOSE) build sam3-video-backend
 
 test-sam3-image:
-	docker compose -f docker-compose.yml -f docker-compose.ml.yml \
-		exec sam3-image-backend python -m pytest tests/ --tb=short -v
+	$(ML_COMPOSE) exec sam3-image-backend python -m pytest tests/ --tb=short -v
 
 test-sam3-video:
-	docker compose -f docker-compose.yml -f docker-compose.ml.yml \
-		exec sam3-video-backend python -m pytest tests/ --tb=short -v
+	$(ML_COMPOSE) exec sam3-video-backend python -m pytest tests/ --tb=short -v
 
 # ─── Initialisation ──────────────────────────────────────────
 init-minio:
