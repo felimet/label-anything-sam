@@ -458,7 +458,7 @@ class NewModel(LabelStudioMLBase):
                         "frame_index":      0,
                         "obj_id":           0,
                         "text":             text_prompt,
-                        "clear_old_boxes":  False,
+                        "clear_old_boxes":  True,
                         "clear_old_points": False,
                     })
 
@@ -507,7 +507,7 @@ class NewModel(LabelStudioMLBase):
                                 "frame_index":      rel_frame_idx,
                                 "obj_id":           obj_id_map[frame_prompts[0]["obj_id"]],
                                 "text":             text_prompt,
-                                "clear_old_boxes":  False,
+                                "clear_old_boxes":  True,
                                 "clear_old_points": False,
                             })
                         continue
@@ -518,7 +518,7 @@ class NewModel(LabelStudioMLBase):
                             "session_id":       session_id,
                             "frame_index":      rel_frame_idx,
                             "obj_id":           obj_id_map[obj_id],
-                            "clear_old_boxes":  False,
+                            "clear_old_boxes":  True,
                             "clear_old_points": False,
                         }
                         if text_prompt and ENABLE_PCS:
