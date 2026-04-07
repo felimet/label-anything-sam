@@ -30,6 +30,9 @@ services:
     environment:
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
+      # GPU assignment: image backend → GPU 0, video backend → GPU 1
+      # CUDA_VISIBLE_DEVICES remaps physical GPUs; inside container "cuda:0" = GPU 0
+      - CUDA_VISIBLE_DEVICES=0
     volumes:
       - hf-cache:/home/appuser/.cache/huggingface
       - ./ml-backends/sam3-image/model.py:/app/model.py:ro
@@ -65,6 +68,8 @@ services:
     environment:
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
+      # GPU assignment: video backend → GPU 1 (image backend uses GPU 0)
+      - CUDA_VISIBLE_DEVICES=1
     volumes:
       - hf-cache:/home/appuser/.cache/huggingface
       - ./ml-backends/sam3-video/model.py:/app/model.py:ro
