@@ -12,11 +12,11 @@ SAM3.1 video API (facebookresearch/sam3 @ sam3.1 branch)
   # Returns Sam3MultiplexVideoPredictor (extends Sam3BasePredictor)
 
   Session lifecycle per request:
-    resp = _predictor.handle_request({"type": "start_session",
+    resp = pred.handle_request({"type": "start_session",
                                      "resource_path": video_path})
     session_id = resp["session_id"]
 
-    _predictor.handle_request({"type": "add_prompt",
+    pred.handle_request({"type": "add_prompt",
                                "session_id": session_id,
                                "frame_index": 0,
                                "text": "optional text prompt",
@@ -28,7 +28,7 @@ SAM3.1 video API (facebookresearch/sam3 @ sam3.1 branch)
                                "clear_old_boxes": False,
                                "clear_old_points": False})
 
-    for frame_data in _predictor.handle_stream_request(
+    for frame_data in pred.handle_stream_request(
             {"type": "propagate_in_video",
              "session_id": session_id,
              "propagation_direction": "both",
@@ -36,7 +36,7 @@ SAM3.1 video API (facebookresearch/sam3 @ sam3.1 branch)
         frame_idx = frame_data["frame_index"]
         outputs   = frame_data["outputs"]
 
-    _predictor.handle_request({"type": "close_session",
+    pred.handle_request({"type": "close_session",
                                "session_id": session_id})
 
 Checkpoint mapping
@@ -408,161 +408,190 @@ class NewModel(LabelStudioMLBase):
         obj_id_map: dict[str, int] = {oid: i for i, oid in enumerate(all_obj_ids)}
 
         start_frame = min((p["frame_idx"] for p in geo_prompts), default=0)
+        last_frame  = max((p["frame_idx"] for p in geo_prompts), default=0)
         score_lines: list[str] = []
 
-        # Open session — SAM3 handles internal frame loading via cv2
-        resp = _predictor.handle_request({
-            "type":          "start_session",
-            "resource_path": video_path,
-        })
-        session_id: str = resp["session_id"]
+        # ── Probe video dimensions ─────────────────────────────────────────
+        cap = cv2.VideoCapture(video_path)
+        vid_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        vid_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+        if vid_w == 0 or vid_h == 0:
+            logger.warning("Could not probe video dimensions for %s; boxes skipped.", video_path)
+            vid_w = vid_h = 0
 
-        try:
-            # Probe video dimensions to convert percentage → pixel coords for add_prompt
-            cap = cv2.VideoCapture(video_path)
-            vid_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            vid_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            cap.release()
-            if vid_w == 0 or vid_h == 0:
-                logger.warning("Could not probe video dimensions for %s; boxes skipped.", video_path)
-                vid_w = vid_h = 0
+        # ── Extract only needed frames to avoid OOM on long videos ─────────
+        # SAM3 start_session accepts an image folder (as well as a video file).
+        # Extracting only [start_frame, last_frame + MAX_FRAMES_TO_TRACK] avoids
+        # loading the entire video (e.g. 400+ frames × 1080p ≈ 2+ GB) into RAM.
+        frame_end = last_frame + MAX_FRAMES_TO_TRACK + 1
 
-            assert _predictor is not None  # guaranteed by _ensure_loaded() above
+        pred = _predictor
+        assert pred is not None  # guaranteed by _ensure_loaded() above
 
-            # Group prompts by frame_idx
-            from collections import defaultdict
-            prompts_by_frame: dict[int, list[dict]] = defaultdict(list)
-            for p in geo_prompts:
-                prompts_by_frame[p["frame_idx"]].append(p)
-
-            for frame_idx in sorted(prompts_by_frame):
-                frame_prompts = prompts_by_frame[frame_idx]
-
-                # ── Build per-object prompt buckets ────────────────────────────
-                # box / positive-point prompts define objects (keyed by obj_id).
-                # Negative (background) points are routed to all box-defined
-                # objects on the same frame; if no boxes exist, they become their
-                # own entry (SAM3 will treat them as background constraints).
-                by_obj: dict[str, dict] = defaultdict(
-                    lambda: {"boxes": [], "pos_points": [], "neg_points": [], "is_positive": True}
+        with tempfile.TemporaryDirectory() as frame_dir:
+            n_extracted = self._extract_frames(video_path, frame_dir, start_frame, frame_end)
+            if n_extracted == 0:
+                logger.error(
+                    "No frames extracted from %s [%d, %d)", video_path, start_frame, frame_end,
                 )
-                box_obj_ids: list[str] = []
+                return [], all_obj_ids, score_lines
 
-                for p in frame_prompts:
-                    if p["type"] == "box":
-                        # SAM3 requires normalised [0, 1] xywh (assertion in sam3_video_inference.py:891)
-                        x0 = p["x_pct"] / 100.0
-                        y0 = p["y_pct"] / 100.0
-                        bw = p["w_pct"] / 100.0
-                        bh = p["h_pct"] / 100.0
-                        by_obj[p["obj_id"]]["boxes"].append([x0, y0, bw, bh])
-                        by_obj[p["obj_id"]]["is_positive"] = p.get("is_positive", True)
-                        if p["obj_id"] not in box_obj_ids:
-                            box_obj_ids.append(p["obj_id"])
-                    elif p["type"] == "point" and vid_w > 0 and vid_h > 0:
-                        px = p["x_pct"] / 100.0 * vid_w
-                        py = p["y_pct"] / 100.0 * vid_h
-                        if p["is_positive"]:
-                            by_obj[p["obj_id"]]["pos_points"].append([px, py])
-                        else:
-                            # Background hint → attach to all box objects; if
-                            # none exist, attach to own obj_id.
-                            targets = box_obj_ids if box_obj_ids else [p["obj_id"]]
-                            for oid in targets:
-                                by_obj[oid]["neg_points"].append([px, py])
+            logger.info(
+                "Extracted %d frames [%d, %d) → %s (avoids loading full video)",
+                n_extracted, start_frame, frame_end, frame_dir,
+            )
 
-                if not by_obj:
-                    # Dimension probe failed; still send text prompt if available.
-                    if text_prompt and ENABLE_PCS and frame_prompts:
-                        _predictor.handle_request({
-                            "type":             "add_prompt",
-                            "session_id":       session_id,
-                            "frame_index":      frame_idx,
-                            "obj_id":           obj_id_map[frame_prompts[0]["obj_id"]],
-                            "text":             text_prompt,
-                            "clear_old_boxes":  False,
-                            "clear_old_points": False,
-                        })
-                    continue
-
-                for obj_id, data in by_obj.items():
-                    req: dict = {
-                        "type":             "add_prompt",
-                        "session_id":       session_id,
-                        "frame_index":      frame_idx,
-                        "obj_id":           obj_id_map[obj_id],
-                        "clear_old_boxes":  False,
-                        "clear_old_points": False,
-                    }
-                    if text_prompt and ENABLE_PCS:
-                        req["text"] = text_prompt
-                    if data["boxes"]:
-                        is_pos = data["is_positive"]
-                        req["bounding_boxes"]      = data["boxes"]
-                        req["bounding_box_labels"] = [1 if is_pos else 0] * len(data["boxes"])
-                    pts: list[list[float]] = []
-                    lbs: list[int]         = []
-                    for pt in data["pos_points"]:
-                        pts.append(pt)
-                        lbs.append(1)
-                    for pt in data["neg_points"]:
-                        pts.append(pt)
-                        lbs.append(0)
-                    if pts:
-                        req["points"]       = pts
-                        req["point_labels"] = lbs
-                    add_resp = _predictor.handle_request(req)
-                    if add_resp:
-                        logger.info(
-                            "add_prompt (frame=%d obj=%d is_pos=%s): %s",
-                            frame_idx, obj_id_map[obj_id], data["is_positive"], add_resp,
-                        )
-                        score_lines.append(
-                            f"frame={frame_idx} obj={obj_id_map[obj_id]} "
-                            f"{'[Object]' if data['is_positive'] else '[Exclude]'}: {add_resp}"
-                        )
-
-            # Propagate forward from the last prompted frame
-            last_frame = max((p["frame_idx"] for p in geo_prompts), default=0)
-            sequence: list[dict] = []
+            # Open session with image folder instead of full video file
+            resp = pred.handle_request({
+                "type":          "start_session",
+                "resource_path": frame_dir,
+            })
+            session_id: str = resp["session_id"]
 
             try:
-                for frame_data in _predictor.handle_stream_request({
-                    "type":                   "propagate_in_video",
-                    "session_id":             session_id,
-                    "propagation_direction":  "forward",
-                    "start_frame_index":      last_frame,
-                    "max_frame_num_to_track": MAX_FRAMES_TO_TRACK,
-                }):
-                    if frame_data is None:
-                        continue
-                    frame_idx: int = frame_data["frame_index"]
-                    outputs: dict  = frame_data.get("outputs") or {}
-                    binary_masks: np.ndarray = outputs.get("out_binary_masks", np.array([]))
+                # Text-only path: no geo_prompts → add_prompt at relative frame 0
+                if not geo_prompts and text_prompt and ENABLE_PCS:
+                    pred.handle_request({
+                        "type":             "add_prompt",
+                        "session_id":       session_id,
+                        "frame_index":      0,
+                        "obj_id":           0,
+                        "text":             text_prompt,
+                        "clear_old_boxes":  False,
+                        "clear_old_points": False,
+                    })
 
-                    for mask in binary_masks:
-                        bbox = self._mask_to_bbox_pct(mask)
-                        if bbox:
-                            sequence.append({
-                                "frame":    frame_idx + 1,      # LS is 1-indexed
-                                "x":        bbox["x"],
-                                "y":        bbox["y"],
-                                "width":    bbox["width"],
-                                "height":   bbox["height"],
-                                "enabled":  True,
-                                "rotation": 0,
-                                "time":     (frame_idx - start_frame) / fps,
+                # Group prompts by original frame_idx
+                from collections import defaultdict
+                prompts_by_frame: dict[int, list[dict]] = defaultdict(list)
+                for p in geo_prompts:
+                    prompts_by_frame[p["frame_idx"]].append(p)
+
+                for orig_frame_idx in sorted(prompts_by_frame):
+                    # Frame index relative to the extracted image folder
+                    rel_frame_idx = orig_frame_idx - start_frame
+                    frame_prompts = prompts_by_frame[orig_frame_idx]
+
+                    # ── Build per-object prompt buckets ────────────────────
+                    by_obj: dict[str, dict] = defaultdict(
+                        lambda: {"boxes": [], "pos_points": [], "neg_points": [], "is_positive": True}
+                    )
+                    box_obj_ids: list[str] = []
+
+                    for p in frame_prompts:
+                        if p["type"] == "box":
+                            x0 = p["x_pct"] / 100.0
+                            y0 = p["y_pct"] / 100.0
+                            bw = p["w_pct"] / 100.0
+                            bh = p["h_pct"] / 100.0
+                            by_obj[p["obj_id"]]["boxes"].append([x0, y0, bw, bh])
+                            by_obj[p["obj_id"]]["is_positive"] = p.get("is_positive", True)
+                            if p["obj_id"] not in box_obj_ids:
+                                box_obj_ids.append(p["obj_id"])
+                        elif p["type"] == "point" and vid_w > 0 and vid_h > 0:
+                            px = p["x_pct"] / 100.0 * vid_w
+                            py = p["y_pct"] / 100.0 * vid_h
+                            if p["is_positive"]:
+                                by_obj[p["obj_id"]]["pos_points"].append([px, py])
+                            else:
+                                targets = box_obj_ids if box_obj_ids else [p["obj_id"]]
+                                for oid in targets:
+                                    by_obj[oid]["neg_points"].append([px, py])
+
+                    if not by_obj:
+                        if text_prompt and ENABLE_PCS and frame_prompts:
+                            pred.handle_request({
+                                "type":             "add_prompt",
+                                "session_id":       session_id,
+                                "frame_index":      rel_frame_idx,
+                                "obj_id":           obj_id_map[frame_prompts[0]["obj_id"]],
+                                "text":             text_prompt,
+                                "clear_old_boxes":  False,
+                                "clear_old_points": False,
                             })
-            except Exception as _prop_err:
-                logger.warning(
-                    "propagate_in_video raised an error (no detections or SAM3 internal): %s",
-                    _prop_err,
-                )
-        finally:
-            _predictor.handle_request({
-                "type":       "close_session",
-                "session_id": session_id,
-            })
+                        continue
+
+                    for obj_id, data in by_obj.items():
+                        req: dict = {
+                            "type":             "add_prompt",
+                            "session_id":       session_id,
+                            "frame_index":      rel_frame_idx,
+                            "obj_id":           obj_id_map[obj_id],
+                            "clear_old_boxes":  False,
+                            "clear_old_points": False,
+                        }
+                        if text_prompt and ENABLE_PCS:
+                            req["text"] = text_prompt
+                        if data["boxes"]:
+                            is_pos = data["is_positive"]
+                            req["bounding_boxes"]      = data["boxes"]
+                            req["bounding_box_labels"] = [1 if is_pos else 0] * len(data["boxes"])
+                        pts: list[list[float]] = []
+                        lbs: list[int]         = []
+                        for pt in data["pos_points"]:
+                            pts.append(pt)
+                            lbs.append(1)
+                        for pt in data["neg_points"]:
+                            pts.append(pt)
+                            lbs.append(0)
+                        if pts:
+                            req["points"]       = pts
+                            req["point_labels"] = lbs
+                        add_resp = pred.handle_request(req)
+                        if add_resp:
+                            logger.info(
+                                "add_prompt (frame=%d→rel=%d obj=%d is_pos=%s): %s",
+                                orig_frame_idx, rel_frame_idx,
+                                obj_id_map[obj_id], data["is_positive"], add_resp,
+                            )
+                            score_lines.append(
+                                f"frame={orig_frame_idx} obj={obj_id_map[obj_id]} "
+                                f"{'[Object]' if data['is_positive'] else '[Exclude]'}: {add_resp}"
+                            )
+
+                rel_last_frame = last_frame - start_frame
+                sequence: list[dict] = []
+
+                try:
+                    for frame_data in pred.handle_stream_request({
+                        "type":                   "propagate_in_video",
+                        "session_id":             session_id,
+                        "propagation_direction":  "forward",
+                        "start_frame_index":      rel_last_frame,
+                        "max_frame_num_to_track": MAX_FRAMES_TO_TRACK,
+                    }):
+                        if frame_data is None:
+                            continue
+                        rel_idx: int   = frame_data["frame_index"]
+                        outputs: dict  = frame_data.get("outputs") or {}
+                        binary_masks: np.ndarray = outputs.get("out_binary_masks", np.array([]))
+
+                        abs_frame = rel_idx + start_frame
+                        for mask in binary_masks:
+                            bbox = self._mask_to_bbox_pct(mask)
+                            if bbox:
+                                sequence.append({
+                                    "frame":    abs_frame + 1,  # LS is 1-indexed
+                                    "x":        bbox["x"],
+                                    "y":        bbox["y"],
+                                    "width":    bbox["width"],
+                                    "height":   bbox["height"],
+                                    "enabled":  True,
+                                    "rotation": 0,
+                                    "time":     rel_idx / fps,
+                                })
+                except Exception as _prop_err:
+                    logger.warning(
+                        "propagate_in_video raised an error (no detections or SAM3 internal): %s",
+                        _prop_err,
+                    )
+            finally:
+                pred.handle_request({
+                    "type":       "close_session",
+                    "session_id": session_id,
+                })
+            # TemporaryDirectory cleaned up here (after close_session)
 
         return sequence, all_obj_ids, score_lines
 
@@ -792,6 +821,34 @@ class NewModel(LabelStudioMLBase):
             "width":  round(float(xs.max() - xs.min() + 1) / w * 100, 2),
             "height": round(float(ys.max() - ys.min() + 1) / h * 100, 2),
         }
+
+    @staticmethod
+    def _extract_frames(
+        video_path: str,
+        frame_dir: str,
+        start_frame: int,
+        end_frame: int,
+    ) -> int:
+        """Extract frames [start_frame, end_frame) to frame_dir as JPEG images.
+
+        Files are named 00000.jpg, 00001.jpg, … (relative index from start_frame).
+        Returns the number of frames actually written.
+        Used by the SAM3 path to avoid loading the entire video into RAM.
+        """
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            logger.error("Cannot open video for frame extraction: %s", video_path)
+            return 0
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        count = 0
+        for rel_idx in range(end_frame - start_frame):
+            ok, frame = cap.read()
+            if not ok:
+                break
+            cv2.imwrite(os.path.join(frame_dir, f"{rel_idx:05d}.jpg"), frame)
+            count += 1
+        cap.release()
+        return count
 
     @staticmethod
     def _split_frames(
