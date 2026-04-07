@@ -459,7 +459,7 @@ class NewModel(LabelStudioMLBase):
                         "obj_id":           0,
                         "text":             text_prompt,
                         "clear_old_boxes":  True,
-                        "clear_old_points": False,
+                        "clear_old_points": True,
                     })
 
                 # Group prompts by original frame_idx
@@ -474,9 +474,10 @@ class NewModel(LabelStudioMLBase):
                     frame_prompts = prompts_by_frame[orig_frame_idx]
 
                     # ── Build per-object prompt buckets ────────────────────
-                    by_obj: dict[str, dict] = defaultdict(
-                        lambda: {"boxes": [], "pos_points": [], "neg_points": [], "is_positive": True}
-                    )
+                    # box_entries: list of (xywh_normalized, is_positive)
+                    # SAM3 multiplex predictor accepts ONLY bounding boxes — no
+                    # point prompts. Keypoints are converted to tiny 2%×2% boxes.
+                    by_obj: dict[str, dict] = defaultdict(lambda: {"box_entries": []})
                     box_obj_ids: list[str] = []
 
                     for p in frame_prompts:
@@ -485,19 +486,24 @@ class NewModel(LabelStudioMLBase):
                             y0 = p["y_pct"] / 100.0
                             bw = p["w_pct"] / 100.0
                             bh = p["h_pct"] / 100.0
-                            by_obj[p["obj_id"]]["boxes"].append([x0, y0, bw, bh])
-                            by_obj[p["obj_id"]]["is_positive"] = p.get("is_positive", True)
+                            is_pos = p.get("is_positive", True)
+                            by_obj[p["obj_id"]]["box_entries"].append(([x0, y0, bw, bh], is_pos))
                             if p["obj_id"] not in box_obj_ids:
                                 box_obj_ids.append(p["obj_id"])
-                        elif p["type"] == "point" and vid_w > 0 and vid_h > 0:
-                            px = p["x_pct"] / 100.0 * vid_w
-                            py = p["y_pct"] / 100.0 * vid_h
-                            if p["is_positive"]:
-                                by_obj[p["obj_id"]]["pos_points"].append([px, py])
+                        elif p["type"] == "point":
+                            # Convert to tiny normalized box (2%×2%) centred on the point.
+                            cx = p["x_pct"] / 100.0
+                            cy = p["y_pct"] / 100.0
+                            is_pos = bool(p.get("is_positive", True))
+                            tiny = [cx, cy, 0.02, 0.02]
+                            # Negative (background) points → attach to all box-defined
+                            # objects; if none exist, attach to own obj_id.
+                            if is_pos:
+                                by_obj[p["obj_id"]]["box_entries"].append((tiny, True))
                             else:
                                 targets = box_obj_ids if box_obj_ids else [p["obj_id"]]
                                 for oid in targets:
-                                    by_obj[oid]["neg_points"].append([px, py])
+                                    by_obj[oid]["box_entries"].append((tiny, False))
 
                     if not by_obj:
                         if text_prompt and ENABLE_PCS and frame_prompts:
@@ -508,7 +514,7 @@ class NewModel(LabelStudioMLBase):
                                 "obj_id":           obj_id_map[frame_prompts[0]["obj_id"]],
                                 "text":             text_prompt,
                                 "clear_old_boxes":  True,
-                                "clear_old_points": False,
+                                "clear_old_points": True,
                             })
                         continue
 
@@ -519,25 +525,14 @@ class NewModel(LabelStudioMLBase):
                             "frame_index":      rel_frame_idx,
                             "obj_id":           obj_id_map[obj_id],
                             "clear_old_boxes":  True,
-                            "clear_old_points": False,
+                            "clear_old_points": True,
                         }
                         if text_prompt and ENABLE_PCS:
                             req["text"] = text_prompt
-                        if data["boxes"]:
-                            is_pos = data["is_positive"]
-                            req["bounding_boxes"]      = data["boxes"]
-                            req["bounding_box_labels"] = [1 if is_pos else 0] * len(data["boxes"])
-                        pts: list[list[float]] = []
-                        lbs: list[int]         = []
-                        for pt in data["pos_points"]:
-                            pts.append(pt)
-                            lbs.append(1)
-                        for pt in data["neg_points"]:
-                            pts.append(pt)
-                            lbs.append(0)
-                        if pts:
-                            req["points"]       = pts
-                            req["point_labels"] = lbs
+                        entries = data["box_entries"]
+                        if entries:
+                            req["bounding_boxes"]      = [b for b, _ in entries]
+                            req["bounding_box_labels"] = [1 if p else 0 for _, p in entries]
                         add_resp = pred.handle_request(req)
                         if add_resp:
                             logger.info(
