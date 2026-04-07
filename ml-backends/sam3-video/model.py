@@ -526,30 +526,38 @@ class NewModel(LabelStudioMLBase):
             last_frame = max((p["frame_idx"] for p in geo_prompts), default=0)
             sequence: list[dict] = []
 
-            for frame_data in _predictor.handle_stream_request({
-                "type":                   "propagate_in_video",
-                "session_id":             session_id,
-                "propagation_direction":  "forward",
-                "start_frame_index":      last_frame,
-                "max_frame_num_to_track": MAX_FRAMES_TO_TRACK,
-            }):
-                frame_idx: int      = frame_data["frame_index"]
-                outputs: dict       = frame_data["outputs"]
-                binary_masks: np.ndarray = outputs.get("out_binary_masks", np.array([]))
+            try:
+                for frame_data in _predictor.handle_stream_request({
+                    "type":                   "propagate_in_video",
+                    "session_id":             session_id,
+                    "propagation_direction":  "forward",
+                    "start_frame_index":      last_frame,
+                    "max_frame_num_to_track": MAX_FRAMES_TO_TRACK,
+                }):
+                    if frame_data is None:
+                        continue
+                    frame_idx: int = frame_data["frame_index"]
+                    outputs: dict  = frame_data.get("outputs") or {}
+                    binary_masks: np.ndarray = outputs.get("out_binary_masks", np.array([]))
 
-                for mask in binary_masks:
-                    bbox = self._mask_to_bbox_pct(mask)
-                    if bbox:
-                        sequence.append({
-                            "frame":    frame_idx + 1,      # LS is 1-indexed
-                            "x":        bbox["x"],
-                            "y":        bbox["y"],
-                            "width":    bbox["width"],
-                            "height":   bbox["height"],
-                            "enabled":  True,
-                            "rotation": 0,
-                            "time":     (frame_idx - start_frame) / fps,
-                        })
+                    for mask in binary_masks:
+                        bbox = self._mask_to_bbox_pct(mask)
+                        if bbox:
+                            sequence.append({
+                                "frame":    frame_idx + 1,      # LS is 1-indexed
+                                "x":        bbox["x"],
+                                "y":        bbox["y"],
+                                "width":    bbox["width"],
+                                "height":   bbox["height"],
+                                "enabled":  True,
+                                "rotation": 0,
+                                "time":     (frame_idx - start_frame) / fps,
+                            })
+            except Exception as _prop_err:
+                logger.warning(
+                    "propagate_in_video raised an error (no detections or SAM3 internal): %s",
+                    _prop_err,
+                )
         finally:
             _predictor.handle_request({
                 "type":       "close_session",
