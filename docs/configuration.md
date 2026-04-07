@@ -107,7 +107,7 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `MAX_FRAMES_TO_TRACK` | `10` | 影片後端每次 predict 最多追蹤畫格數 |
+| `MAX_FRAMES_TO_TRACK` | `10` | **雙重作用：** (1) 每次 predict 傳給 `propagate_in_video` 的 `max_frame_num_to_track`；(2) 記憶體預算 — 後端只抽取 `[start_frame, last_frame + MAX_FRAMES_TO_TRACK + 1)` 的畫格至暫存資料夾，再以 image folder 模式開啟 SAM3 session，避免長影片 OOM。數值越小追蹤越短但記憶體越低。 |
 
 ### PCS（文字概念提示）設定
 
