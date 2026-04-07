@@ -53,8 +53,6 @@ logger = logging.getLogger(__name__)
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 MODEL_ID: str = os.getenv("SAM3_IMAGE_MODEL_ID", os.getenv("SAM3_MODEL_ID", "facebook/sam3.1"))
 CHECKPOINT_FILENAME: str = os.getenv("SAM3_IMAGE_CHECKPOINT_FILENAME", os.getenv("SAM3_CHECKPOINT_FILENAME", "sam3.pt"))
-MODEL_DIR: str = os.getenv("SAM3_MODEL_DIR", os.getenv("MODEL_DIR", "/data/models"))
-
 # PCS / text-prompt feature gate
 ENABLE_PCS: bool = os.getenv("SAM3_ENABLE_PCS", "true").lower() == "true"
 # Confidence threshold for text-prompt detections (Sam3Processor default = 0.5)
@@ -71,24 +69,21 @@ _autocast_kwargs: Optional[dict] = None  # set in _ensure_loaded after fork
 def _download_with_progress(
     repo_id: str,
     filename: str,
-    local_dir: str,
     token: Optional[str],
 ) -> str:
-    """Wrap hf_hub_download with a background thread that logs download progress
-    every 30 s so container logs show meaningful progress instead of silence."""
+    """Wrap hf_hub_download with a heartbeat thread that logs every 30 s.
+    Checkpoint is stored in HF_HOME cache (hf-cache volume); path returned
+    directly — no extra copy to a separate volume."""
     from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
     # Suppress tqdm progress bars — they produce \r-heavy output in container logs.
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
-    partial_path = os.path.join(local_dir, filename)
     stop_event = threading.Event()
 
     def _log_progress() -> None:
         while not stop_event.is_set():
-            if os.path.exists(partial_path):
-                size_mb = os.path.getsize(partial_path) / (1024 * 1024)
-                logger.info("  … downloading %s: %.0f MB so far", filename, size_mb)
+            logger.info("  … still downloading %s, please wait …", filename)
             stop_event.wait(30)
 
     monitor = threading.Thread(target=_log_progress, daemon=True)
@@ -97,7 +92,6 @@ def _download_with_progress(
         path = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
-            local_dir=local_dir,
             token=token,
         )
     finally:
@@ -107,13 +101,11 @@ def _download_with_progress(
 
 try:
     _hf_token: Optional[str] = os.getenv("HF_TOKEN") or None
-    os.makedirs(MODEL_DIR, exist_ok=True)
 
     logger.info("Downloading SAM3 checkpoint '%s/%s' …", MODEL_ID, CHECKPOINT_FILENAME)
     _checkpoint_path: str = _download_with_progress(
         repo_id=MODEL_ID,
         filename=CHECKPOINT_FILENAME,
-        local_dir=MODEL_DIR,
         token=_hf_token,
     )
     logger.info("Checkpoint cached at: %s", _checkpoint_path)

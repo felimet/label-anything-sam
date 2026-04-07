@@ -29,11 +29,9 @@ services:
       - .env.ml
     environment:
       - LABEL_STUDIO_URL=http://label-studio:8080
-      - MODEL_DIR=/data/models
       - PORT=9090
     volumes:
       - hf-cache:/home/appuser/.cache/huggingface
-      - sam3-image-models:/data/models
       - ./ml-backends/sam3-image/model.py:/app/model.py:ro
     deploy:
       resources:
@@ -66,11 +64,9 @@ services:
       - .env.ml
     environment:
       - LABEL_STUDIO_URL=http://label-studio:8080
-      - MODEL_DIR=/data/models
       - PORT=9090
     volumes:
       - hf-cache:/home/appuser/.cache/huggingface
-      - sam3-video-models:/data/models
       - ./ml-backends/sam3-video/model.py:/app/model.py:ro
     deploy:
       resources:
@@ -93,5 +89,3 @@ services:
 
 volumes:
   hf-cache:
-  sam3-image-models:
-  sam3-video-models:

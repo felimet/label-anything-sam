@@ -13,7 +13,8 @@ VideoRectangle tracking + optional text (PCS) prompts using [SAM 3.1](https://gi
 
 | Variable | Default | Description |
 |---|---|---|
-| `SAM3_MODEL_ID` | `facebook/sam3.1` | HF model ID |
+| `SAM3_VIDEO_MODEL_ID` | `facebook/sam3.1` | HF model ID (video backend). Fallback: `SAM3_MODEL_ID` |
+| `SAM3_VIDEO_CHECKPOINT_FILENAME` | `sam3.1_multiplex.pt` | Checkpoint filename (~3.5 GB). Requires `sam3.1` branch build arg. Fallback: `SAM3_CHECKPOINT_FILENAME` |
 | `MAX_FRAMES_TO_TRACK` | `10` | Max frames to propagate per request |
 | `DEVICE` | `cuda` | `cuda` or `cpu` |
 | `HF_TOKEN` | — | HF gated token (required) |

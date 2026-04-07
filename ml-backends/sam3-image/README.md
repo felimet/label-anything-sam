@@ -39,9 +39,8 @@ Use `labeling_config.xml` as your project's labeling interface.
 
 | Variable | Default | Description |
 |---|---|---|
-| `SAM3_MODEL_ID` | `facebook/sam3.1` | HuggingFace model ID |
-| `SAM3_CHECKPOINT_FILENAME` | `sam3.1_multiplex.pt` | Checkpoint filename on HF |
-| `MODEL_DIR` | `/data/models` | Local checkpoint cache directory |
+| `SAM3_IMAGE_MODEL_ID` | `facebook/sam3` | HuggingFace model ID (image backend). Fallback: `SAM3_MODEL_ID` |
+| `SAM3_IMAGE_CHECKPOINT_FILENAME` | `sam3.pt` | Checkpoint filename (~3.45 GB). No SAM3.1 image variant exists. Fallback: `SAM3_CHECKPOINT_FILENAME` |
 | `DEVICE` | `cuda` | `cuda` or `cpu` |
 | `HF_TOKEN` | — | HuggingFace access token (required for gated model) |
 | `LABEL_STUDIO_URL` | `http://label-studio:8080` | Label Studio internal URL |
