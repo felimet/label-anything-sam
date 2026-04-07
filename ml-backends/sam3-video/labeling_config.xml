@@ -93,7 +93,7 @@
   <!-- Track labels: Object (positive) or Exclude (negative box) -->
   <View className="sam3-section">
     <HyperText name="h_labels" value="" className="sam3-label" inline="true">
-      <span title="為追蹤的物件貼上語意標籤。&#10;&#10;Object  → 正向框（告訴模型要追蹤這個區域）&#10;Exclude → 負向框（告訴模型排除此區域，不追蹤）&#10;&#10;框選後從此處選取標籤。">Track Labels</span>
+      <span title="為追蹤的物件貼上語意標籤。&#10;&#10;blank   → 不選標籤，等同 Object（預設正向追蹤）&#10;Object  → 正向框（告訴模型要追蹤這個區域）&#10;Exclude → 負向框（告訴模型排除此區域，不追蹤）&#10;&#10;框選後從此處選取標籤；不選也可直接送出。">Track Labels</span>
     </HyperText>
     <Labels name="videoLabels" toName="video" allowEmpty="true">
       <Label value="Object"  background="#11A39E"/>
