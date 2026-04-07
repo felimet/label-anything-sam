@@ -58,6 +58,7 @@ import sys
 import tempfile
 import threading
 from typing import List, Dict, Optional
+from urllib.parse import urlparse, urlunparse
 
 import cv2
 import numpy as np
@@ -67,6 +68,25 @@ from label_studio_ml.response import ModelResponse
 from label_studio_sdk.label_interface.objects import PredictionValue
 
 logger = logging.getLogger(__name__)
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+def _to_internal_url(url: str) -> str:
+    """Replace external Label Studio host with internal Docker service URL.
+
+    Task data stores the public URL (e.g. https://label-studio.example.com/…).
+    The ML backend container must use the internal URL (LABEL_STUDIO_URL) to
+    bypass Cloudflare Access / reverse-proxy authentication.
+    """
+    ls_internal = os.getenv("LABEL_STUDIO_URL", "").rstrip("/")
+    if not ls_internal or not url:
+        return url
+    parsed = urlparse(url)
+    internal = urlparse(ls_internal)
+    # Only rewrite Label Studio paths — don't touch S3/MinIO/external URLs
+    if parsed.path.startswith(("/data/", "/api/", "/tasks/")):
+        return urlunparse(parsed._replace(scheme=internal.scheme, netloc=internal.netloc))
+    return url
+
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
@@ -261,6 +281,15 @@ class NewModel(LabelStudioMLBase):
         if not geo_prompts and not text_prompt:
             return ModelResponse(predictions=[])
 
+        # Text-only Submit: stage text without triggering inference.
+        # Inference fires when geometry (VideoRectangle) is also present.
+        if text_prompt and not geo_prompts:
+            logger.info(
+                "Text prompt staged (%r) — inference deferred until VideoRectangle is added.",
+                text_prompt,
+            )
+            return ModelResponse(predictions=[])
+
         if text_prompt and _USING_SAM2_FALLBACK:
             logger.warning(
                 "Text prompt '%s' ignored — SAM2 fallback does not support PCS.",
@@ -271,7 +300,7 @@ class NewModel(LabelStudioMLBase):
                 return ModelResponse(predictions=[])
 
         # ── Resolve video path ─────────────────────────────────────────────────
-        video_url = task["data"][value]
+        video_url = _to_internal_url(task["data"][value])
         try:
             video_path = self.get_local_path(video_url, task_id=task_id)
         except Exception as exc:
@@ -290,13 +319,14 @@ class NewModel(LabelStudioMLBase):
             duration     = _n / fps
 
         # ── Dispatch to correct predictor path ─────────────────────────────────
+        score_lines: list[str] = []
         try:
             if _USING_SAM2_FALLBACK:
                 sequence, all_obj_ids = self._predict_sam2(
                     video_path, geo_prompts, fps,
                 )
             else:
-                sequence, all_obj_ids = self._predict_sam3(
+                sequence, all_obj_ids, score_lines = self._predict_sam3(
                     video_path, geo_prompts, text_prompt, fps,
                 )
         except Exception as exc:
@@ -307,20 +337,32 @@ class NewModel(LabelStudioMLBase):
         context_sequence = vr_results[0]["value"].get("sequence", []) if vr_results else []
         full_sequence    = context_sequence + sequence
 
-        prediction = PredictionValue(
-            result=[{
-                "value": {
-                    "framesCount": frames_count,
-                    "duration":    duration,
-                    "sequence":    full_sequence,
-                },
-                "from_name": from_name,
-                "to_name":   to_name,
-                "type":      "videorectangle",
-                "origin":    "manual",
-                "id":        list(all_obj_ids)[0] if all_obj_ids else "obj0",
-            }]
-        )
+        import uuid as _uuid
+        result_items: list[dict] = [{
+            "value": {
+                "framesCount": frames_count,
+                "duration":    duration,
+                "sequence":    full_sequence,
+            },
+            "from_name": from_name,
+            "to_name":   to_name,
+            "type":      "videorectangle",
+            "origin":    "manual",
+            "id":        list(all_obj_ids)[0] if all_obj_ids else "obj0",
+        }]
+
+        # Scores TextArea — filled after each prediction (read-only display)
+        if score_lines:
+            logger.info("Inference scores:\n%s", "\n".join(score_lines))
+        result_items.append({
+            "id":        str(_uuid.uuid4())[:8],
+            "from_name": "scores",
+            "to_name":   to_name,
+            "type":      "textarea",
+            "value":     {"text": ["\n".join(score_lines) if score_lines else "—"]},
+        })
+
+        prediction = PredictionValue(result=result_items)
         return ModelResponse(predictions=[prediction])
 
     def fit(self, event: str, data: dict, **kwargs) -> None:
@@ -334,8 +376,11 @@ class NewModel(LabelStudioMLBase):
         geo_prompts: list[dict],
         text_prompt: Optional[str],
         fps: float,
-    ) -> tuple[list[dict], set[str]]:
-        """Run SAM3 session-based video predictor."""
+    ) -> tuple[list[dict], set[str], list[str]]:
+        """Run SAM3 session-based video predictor.
+
+        Returns (sequence, all_obj_ids, score_lines).
+        """
         ctx = torch.autocast(**_autocast_kwargs) if _autocast_kwargs else None
         if ctx:
             ctx.__enter__()
@@ -351,11 +396,12 @@ class NewModel(LabelStudioMLBase):
         geo_prompts: list[dict],
         text_prompt: Optional[str],
         fps: float,
-    ) -> tuple[list[dict], set[str]]:
+    ) -> tuple[list[dict], set[str], list[str]]:
         all_obj_ids: set[str] = {p["obj_id"] for p in geo_prompts} or {"text_obj"}
         obj_id_map: dict[str, int] = {oid: i for i, oid in enumerate(all_obj_ids)}
 
         start_frame = min((p["frame_idx"] for p in geo_prompts), default=0)
+        score_lines: list[str] = []
 
         # Open session — SAM3 handles internal frame loading via cv2
         resp = _predictor.handle_request({
@@ -376,18 +422,6 @@ class NewModel(LabelStudioMLBase):
 
             assert _predictor is not None  # guaranteed by _ensure_loaded() above
 
-            # Text-only path: no geo_prompts, send a single add_prompt at frame 0
-            if not geo_prompts and text_prompt and ENABLE_PCS:
-                _predictor.handle_request({
-                    "type":             "add_prompt",
-                    "session_id":       session_id,
-                    "frame_index":      0,
-                    "obj_id":           0,
-                    "text":             text_prompt,
-                    "clear_old_boxes":  False,
-                    "clear_old_points": False,
-                })
-
             # Group prompts by frame_idx
             from collections import defaultdict
             prompts_by_frame: dict[int, list[dict]] = defaultdict(list)
@@ -403,7 +437,7 @@ class NewModel(LabelStudioMLBase):
                 # objects on the same frame; if no boxes exist, they become their
                 # own entry (SAM3 will treat them as background constraints).
                 by_obj: dict[str, dict] = defaultdict(
-                    lambda: {"boxes": [], "pos_points": [], "neg_points": []}
+                    lambda: {"boxes": [], "pos_points": [], "neg_points": [], "is_positive": True}
                 )
                 box_obj_ids: list[str] = []
 
@@ -415,6 +449,7 @@ class NewModel(LabelStudioMLBase):
                         bw = p["w_pct"] / 100.0
                         bh = p["h_pct"] / 100.0
                         by_obj[p["obj_id"]]["boxes"].append([x0, y0, bw, bh])
+                        by_obj[p["obj_id"]]["is_positive"] = p.get("is_positive", True)
                         if p["obj_id"] not in box_obj_ids:
                             box_obj_ids.append(p["obj_id"])
                     elif p["type"] == "point" and vid_w > 0 and vid_h > 0:
@@ -455,8 +490,9 @@ class NewModel(LabelStudioMLBase):
                     if text_prompt and ENABLE_PCS:
                         req["text"] = text_prompt
                     if data["boxes"]:
+                        is_pos = data["is_positive"]
                         req["bounding_boxes"]      = data["boxes"]
-                        req["bounding_box_labels"] = [1] * len(data["boxes"])
+                        req["bounding_box_labels"] = [1 if is_pos else 0] * len(data["boxes"])
                     pts: list[list[float]] = []
                     lbs: list[int]         = []
                     for pt in data["pos_points"]:
@@ -468,7 +504,16 @@ class NewModel(LabelStudioMLBase):
                     if pts:
                         req["points"]       = pts
                         req["point_labels"] = lbs
-                    _predictor.handle_request(req)
+                    add_resp = _predictor.handle_request(req)
+                    if add_resp:
+                        logger.info(
+                            "add_prompt (frame=%d obj=%d is_pos=%s): %s",
+                            frame_idx, obj_id_map[obj_id], data["is_positive"], add_resp,
+                        )
+                        score_lines.append(
+                            f"frame={frame_idx} obj={obj_id_map[obj_id]} "
+                            f"{'[Object]' if data['is_positive'] else '[Exclude]'}: {add_resp}"
+                        )
 
             # Propagate forward from the last prompted frame
             last_frame = max((p["frame_idx"] for p in geo_prompts), default=0)
@@ -504,7 +549,7 @@ class NewModel(LabelStudioMLBase):
                 "session_id": session_id,
             })
 
-        return sequence, all_obj_ids
+        return sequence, all_obj_ids, score_lines
 
     # ── SAM2 fallback predict path ─────────────────────────────────────────────
 
@@ -632,7 +677,7 @@ class NewModel(LabelStudioMLBase):
         """Parse VideoRectangle and KeyPointLabels items into prompt dicts.
 
         Returns a list of dicts with ``type`` = "box" or "point".
-        Box fields  : obj_id, frame_idx, x_pct, y_pct, w_pct, h_pct
+        Box fields  : obj_id, frame_idx, x_pct, y_pct, w_pct, h_pct, is_positive
         Point fields: obj_id, frame_idx, x_pct, y_pct, is_positive, label_name
         """
         prompts: list[dict] = []
@@ -641,18 +686,23 @@ class NewModel(LabelStudioMLBase):
 
             if item_type == "videorectangle":
                 obj_id = item["id"]
+                # Label applied to the whole tracking object (not per-frame sequence).
+                # "Exclude" → negative prompt (bounding_box_labels=0).
+                label_name  = (item["value"].get("labels") or ["Object"])[0]
+                is_positive = label_name.lower() != "exclude"
                 for seq in item["value"].get("sequence", []):
                     if not seq.get("enabled", True):
                         continue
                     frame_idx = max(seq.get("frame", 1) - 1, 0)  # LS 1-indexed → 0-indexed
                     prompts.append({
-                        "type":      "box",
-                        "obj_id":    obj_id,
-                        "frame_idx": frame_idx,
-                        "x_pct":     seq.get("x",      0.0),
-                        "y_pct":     seq.get("y",      0.0),
-                        "w_pct":     seq.get("width",  0.0),
-                        "h_pct":     seq.get("height", 0.0),
+                        "type":        "box",
+                        "obj_id":      obj_id,
+                        "frame_idx":   frame_idx,
+                        "x_pct":       seq.get("x",      0.0),
+                        "y_pct":       seq.get("y",      0.0),
+                        "w_pct":       seq.get("width",  0.0),
+                        "h_pct":       seq.get("height", 0.0),
+                        "is_positive": is_positive,
                     })
 
             elif item_type == "keypointlabels":
@@ -677,9 +727,13 @@ class NewModel(LabelStudioMLBase):
         return sorted(prompts, key=lambda p: p["frame_idx"])
 
     def _get_text_prompt(self, context: dict) -> Optional[str]:
-        """Extract the first non-empty TextArea value from context."""
+        """Extract the first non-empty TextArea value from context.
+
+        Skips the scores TextArea (from_name="scores") to avoid feeding
+        backend-generated score output back in as a text prompt.
+        """
         for item in context.get("result", []):
-            if item.get("type") == "textarea":
+            if item.get("type") == "textarea" and item.get("from_name") != "scores":
                 texts = item["value"].get("text", [])
                 if texts:
                     candidate = str(texts[0]).strip()

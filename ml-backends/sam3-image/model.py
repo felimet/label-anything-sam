@@ -38,6 +38,7 @@ import os
 import sys
 import threading
 from typing import List, Dict, Optional
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import numpy as np
@@ -48,6 +49,25 @@ from label_studio_ml.response import ModelResponse
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+def _to_internal_url(url: str) -> str:
+    """Replace external Label Studio host with internal Docker service URL.
+
+    Task data stores the public URL (e.g. https://label-studio.example.com/…).
+    The ML backend container must use the internal URL (LABEL_STUDIO_URL) to
+    bypass Cloudflare Access / reverse-proxy authentication.
+    """
+    ls_internal = os.getenv("LABEL_STUDIO_URL", "").rstrip("/")
+    if not ls_internal or not url:
+        return url
+    parsed = urlparse(url)
+    internal = urlparse(ls_internal)
+    # Only rewrite Label Studio paths — don't touch S3/MinIO/external URLs
+    if parsed.path.startswith(("/data/", "/api/", "/tasks/")):
+        return urlunparse(parsed._replace(scheme=internal.scheme, netloc=internal.netloc))
+    return url
+
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
@@ -123,14 +143,15 @@ except Exception as _hf_err:
 # _ensure_loaded() is called at the start of predict() — i.e. inside the worker
 # process, after gunicorn has already forked. CUDA is then initialised cleanly
 # in each worker.
-_processor = None
+_processor = None          # Sam3Processor (PCS + geo) or SAM2ImagePredictor (fallback)
+_sam2_geo_predictor = None # SAM2ImagePredictor — geo-only prompts, spatially constrained
 _USING_SAM2_FALLBACK: bool = False
 _init_lock = threading.Lock()
 
 
 def _ensure_loaded() -> None:
     """Load SAM3 (or SAM2 fallback) model on first call inside the worker process."""
-    global _processor, _USING_SAM2_FALLBACK
+    global _processor, _sam2_geo_predictor, _USING_SAM2_FALLBACK
     if _processor is not None:
         return
     with _init_lock:
@@ -176,6 +197,14 @@ def _ensure_loaded() -> None:
                 device=DEVICE,
                 confidence_threshold=CONFIDENCE_THRESHOLD,
             )
+            # SAM3 image model is SAM2-compatible. Wrapping with SAM2ImagePredictor
+            # shares the same weights (no extra VRAM) and gives spatially-constrained
+            # box/point segmentation — used when there is NO text prompt.
+            _sam3_src = "/sam3"
+            if _sam3_src not in sys.path:
+                sys.path.insert(0, _sam3_src)
+            from sam2.sam2_image_predictor import SAM2ImagePredictor        # type: ignore[import]
+            _sam2_geo_predictor = SAM2ImagePredictor(_sam_model)            # type: ignore[assignment]
             logger.info("SAM3 image model loaded (PCS enabled=%s).", ENABLE_PCS)
 
         except ImportError as err:
@@ -199,6 +228,7 @@ def _ensure_loaded() -> None:
                 device=DEVICE,
             )
             _processor = SAM2ImagePredictor(_sam2_model)                   # type: ignore[assignment]
+            _sam2_geo_predictor = _processor
             logger.info("SAM2 image predictor loaded (SAM3 fallback).")
 
 
@@ -254,7 +284,9 @@ class NewModel(LabelStudioMLBase):
         text_prompt: Optional[str] = None
         point_coords: list[list[float]] = []
         point_labels: list[int] = []
-        input_box: Optional[list[float]] = None
+        # Each entry: (box_xyxy_pixels, is_positive)
+        # is_positive=False for "Exclude" label → negative exemplar in SAM3
+        input_boxes: list[tuple[list[float], bool]] = []
         selected_label: Optional[str] = None
 
         for ctx in context["result"]:
@@ -275,8 +307,9 @@ class NewModel(LabelStudioMLBase):
 
             label_list = ctx["value"].get(ctx_type, [])
             label_name = label_list[0] if label_list else ""
-            # Only set selected_label from non-background, non-empty labels
-            if label_name and label_name.lower() != "background" and selected_label is None:
+            # Only set selected_label from positive, non-background, non-empty labels
+            _is_exclude = label_name.lower() == "exclude"
+            if label_name and label_name.lower() not in ("background", "exclude") and selected_label is None:
                 selected_label = label_name
 
             if ctx_type == "keypointlabels":
@@ -291,15 +324,27 @@ class NewModel(LabelStudioMLBase):
             elif ctx_type == "rectanglelabels":
                 box_w = ctx["value"].get("width",  0.0) * image_width  / 100.0
                 box_h = ctx["value"].get("height", 0.0) * image_height / 100.0
-                input_box = [x, y, x + box_w, y + box_h]  # pixel xyxy
+                input_boxes.append(([x, y, x + box_w, y + box_h], not _is_exclude))
 
         logger.debug(
-            "text=%r  points=%s  labels=%s  box=%s  label=%s",
-            text_prompt, point_coords, point_labels, input_box, selected_label,
+            "text=%r  points=%s  labels=%s  boxes=%s  label=%s",
+            text_prompt, point_coords, point_labels,
+            [(b, "+" if p else "-") for b, p in input_boxes], selected_label,
         )
 
         has_text = ENABLE_PCS and text_prompt is not None and not _USING_SAM2_FALLBACK
-        has_geo  = bool(point_coords) or input_box is not None
+        has_geo  = bool(point_coords) or bool(input_boxes)
+
+        # Text-only (no geometry) → store silently, do NOT run inference.
+        # TextArea submit is used to "stage" a text prompt; the actual prediction
+        # fires only when the user adds a box or keypoint (geometry in context).
+        # This prevents a spurious predict when the user types text before drawing.
+        if has_text and not has_geo:
+            logger.info("Text prompt staged (%r) — inference deferred until geometry is added.", text_prompt)
+            return ModelResponse(predictions=[])
+
+        if not has_text and not has_geo:
+            return ModelResponse(predictions=[])
 
         # Text-only path: no geometric context → selected_label stays None.
         # Default to the first BrushLabels label so the mask gets a visible colour.
@@ -307,18 +352,25 @@ class NewModel(LabelStudioMLBase):
             brush_labels = self.parsed_label_config.get(from_name, {}).get("labels", [])
             selected_label = brush_labels[0] if brush_labels else "Object"
 
-        if not has_text and not has_geo:
-            if text_prompt and _USING_SAM2_FALLBACK:
-                logger.warning(
-                    "Text prompt '%s' ignored — SAM2 fallback does not support PCS.",
-                    text_prompt,
-                )
-            return ModelResponse(predictions=[])
-
         # ── Load image ─────────────────────────────────────────────────────────
-        img_url  = tasks[0]["data"][value]
+        img_url  = _to_internal_url(tasks[0]["data"][value])
         img_path = self.get_local_path(img_url, task_id=tasks[0].get("id"))
-        pil_img  = Image.open(img_path).convert("RGB")
+        try:
+            pil_img = Image.open(img_path).convert("RGB")
+        except Exception:
+            # Diagnose: log file size + first 64 bytes so we can tell whether
+            # the download returned an image or an HTML/auth-error page.
+            try:
+                _sz = os.path.getsize(img_path)
+                with open(img_path, "rb") as _f:
+                    _hdr = _f.read(64)
+                logger.error(
+                    "Cannot open image '%s' (%d bytes). Header hex: %s  ASCII: %r",
+                    img_path, _sz, _hdr.hex(), _hdr,
+                )
+            except Exception:
+                pass
+            raise
 
         # Text-only path: no geometric context, derive dimensions from the image.
         if image_width is None or image_height is None:
@@ -326,17 +378,33 @@ class NewModel(LabelStudioMLBase):
 
         image = np.array(pil_img)
 
-        # ── Run SAM3 predictor ─────────────────────────────────────────────────
+        # ── Run predictor ──────────────────────────────────────────────────────
+        # Routing:
+        #   SAM2 (spatially constrained): geo-only, single positive box or points
+        #   SAM3 (PCS): text prompt, multiple boxes, or any negative (Exclude) box
+        #   Fallback: SAM2ImagePredictor for all prompts when SAM3 unavailable
+        has_negative_box = any(not is_pos for _, is_pos in input_boxes)
+        has_multi_box    = len(input_boxes) > 1
+        use_sam2 = (
+            not _USING_SAM2_FALLBACK
+            and has_geo
+            and not has_text
+            and not has_negative_box
+            and not has_multi_box
+        )
+        # SAM2 only supports a single box; extract it (or None if points-only)
+        single_box = input_boxes[0][0] if input_boxes else None
+
         try:
-            if _USING_SAM2_FALLBACK:
+            if _USING_SAM2_FALLBACK or use_sam2:
                 return self._predict_sam2(
-                    image, point_coords, point_labels, input_box,
+                    image, point_coords, point_labels, single_box,
                     selected_label, image_width, image_height,
                     from_name, to_name,
                 )
             else:
                 return self._predict_sam3(
-                    image, text_prompt, point_coords, point_labels, input_box,
+                    image, text_prompt, point_coords, point_labels, input_boxes,
                     selected_label, image_width, image_height,
                     from_name, to_name,
                 )
@@ -355,7 +423,7 @@ class NewModel(LabelStudioMLBase):
         text_prompt: Optional[str],
         point_coords: list,
         point_labels: list,
-        input_box: Optional[list],
+        input_boxes: list,          # list of (box_xyxy, is_positive)
         selected_label: Optional[str],
         image_width: int,
         image_height: int,
@@ -368,7 +436,7 @@ class NewModel(LabelStudioMLBase):
             ctx.__enter__()
         try:
             return self._predict_sam3_inner(
-                image, text_prompt, point_coords, point_labels, input_box,
+                image, text_prompt, point_coords, point_labels, input_boxes,
                 selected_label, image_width, image_height, from_name, to_name,
             )
         finally:
@@ -381,7 +449,7 @@ class NewModel(LabelStudioMLBase):
         text_prompt: Optional[str],
         point_coords: list,
         point_labels: list,
-        input_box: Optional[list],
+        input_boxes: list,          # list of (box_xyxy, is_positive)
         selected_label: Optional[str],
         image_width: int,
         image_height: int,
@@ -397,18 +465,19 @@ class NewModel(LabelStudioMLBase):
             assert text_prompt is not None
             state = _processor.set_text_prompt(prompt=text_prompt, state=state)  # type: ignore[attr-defined]
 
-        # Geometric prompts
+        # Geometric prompts — boxes (positive and negative/Exclude)
         # Sam3Processor.add_geometric_prompt() expects:
         #   box = [cx, cy, w, h]  normalized [0, 1]
-        #   label = True (foreground) / False (background)
-        if input_box is not None:
-            x0, y0, x1, y1 = input_box
+        #   label = True (foreground) / False (background / Exclude)
+        for box_xyxy, is_positive in input_boxes:
+            x0, y0, x1, y1 = box_xyxy
             cx = ((x0 + x1) / 2.0) / image_width
             cy = ((y0 + y1) / 2.0) / image_height
             w  = (x1 - x0) / image_width
             h  = (y1 - y0) / image_height
+            logger.debug("add_geometric_prompt box=[%.3f,%.3f,%.3f,%.3f] positive=%s", cx, cy, w, h, is_positive)
             state = _processor.add_geometric_prompt(  # type: ignore[attr-defined]
-                box=[cx, cy, w, h], label=True, state=state,
+                box=[cx, cy, w, h], label=is_positive, state=state,
             )
 
         # Points: Sam3Processor has no add_point_prompt() — represent each point
@@ -426,21 +495,30 @@ class NewModel(LabelStudioMLBase):
 
         masks_tensor  = state.get("masks")   # [N, 1, H, W] bool
         scores_tensor = state.get("scores")  # [N] float
+        boxes_tensor  = state.get("boxes")   # [N, 4] float pixel xyxy (may be None)
 
         if masks_tensor is None or masks_tensor.shape[0] == 0:
             logger.info("SAM3 returned no detections (threshold=%.2f).", CONFIDENCE_THRESHOLD)
             return ModelResponse(predictions=[])
 
+        n_total = masks_tensor.shape[0]
+        # Log ALL detected candidates before filtering
+        if scores_tensor is not None:
+            for i in range(n_total):
+                s = float(scores_tensor[i])
+                b = boxes_tensor[i].cpu().tolist() if boxes_tensor is not None else None
+                logger.info("  [SAM3] candidate %d  score=%.4f  box=%s", i, s, b)
+
         # Determine which masks to return
-        n_masks = masks_tensor.shape[0]
         if RETURN_ALL_MASKS:
-            indices = list(range(n_masks))
+            indices = list(range(n_total))
         else:
             best_idx = int(scores_tensor.argmax().item()) if scores_tensor is not None else 0
             indices = [best_idx]
 
         results = []
-        for idx in indices:
+        score_lines: list[str] = []
+        for rank, idx in enumerate(indices):
             mask_np = masks_tensor[idx, 0].cpu().numpy().astype(np.uint8)
             score   = float(scores_tensor[idx]) if scores_tensor is not None else 1.0
             rle     = brush.mask2rle(mask_np * 255)
@@ -460,8 +538,28 @@ class NewModel(LabelStudioMLBase):
                 "score":    score,
                 "readonly": False,
             })
+            box_str = ""
+            if boxes_tensor is not None:
+                x0, y0, x1, y1 = [int(v) for v in boxes_tensor[idx].cpu().tolist()]
+                box_str = f"  box=[{x0},{y0},{x1},{y1}]"
+            score_lines.append(f"#{rank}  score={score:.4f}{box_str}")
+
+        # All candidates summary (even those filtered out)
+        if scores_tensor is not None and n_total > len(indices):
+            score_lines.append(f"(+{n_total - len(indices)} filtered candidates)")
 
         best_score = float(scores_tensor[indices].max()) if scores_tensor is not None else 1.0
+        logger.info("[SAM3] returning %d mask(s), best=%.4f", len(indices), best_score)
+
+        # Score display result — fills <TextArea name="scores"> in labeling config
+        results.append({
+            "id":        str(uuid4())[:4],
+            "from_name": "scores",
+            "to_name":   to_name,
+            "type":      "textarea",
+            "value":     {"text": ["\n".join(score_lines)]},
+        })
+
         return ModelResponse(predictions=[{
             "result":        results,
             "model_version": self.get("model_version"),
@@ -507,41 +605,58 @@ class NewModel(LabelStudioMLBase):
         from_name: str,
         to_name: str,
     ) -> ModelResponse:
-        _processor.set_image(image)  # type: ignore[attr-defined]
+        _sam2_geo_predictor.set_image(image)  # type: ignore[attr-defined]
 
         np_points = np.array(point_coords, dtype=np.float32) if point_coords else None
         np_labels = np.array(point_labels, dtype=np.float32) if point_labels else None
         np_box    = np.array(input_box,    dtype=np.float32) if input_box    else None
 
-        masks, scores, _ = _processor.predict(  # type: ignore[attr-defined]
+        masks, scores, _ = _sam2_geo_predictor.predict(  # type: ignore[attr-defined]
             point_coords=np_points,
             point_labels=np_labels,
             box=np_box,
             multimask_output=True,
         )
         # Sort by score descending, take best
-        best_idx  = int(np.argsort(scores)[::-1][0])
-        best_mask = masks[best_idx].astype(np.uint8)
+        sorted_idx = np.argsort(scores)[::-1]
+        for rank, i in enumerate(sorted_idx):
+            logger.info("  [SAM2-geo] candidate %d  score=%.4f", rank, float(scores[i]))
+
+        best_idx   = int(sorted_idx[0])
+        best_mask  = masks[best_idx].astype(np.uint8)
         best_score = float(scores[best_idx])
+        logger.info("[SAM2-geo] returning mask, score=%.4f", best_score)
+
+        score_lines = [f"#{r}  score={float(scores[i]):.4f}" for r, i in enumerate(sorted_idx)]
+        score_lines[0] += "  ← selected"
 
         rle = brush.mask2rle(best_mask * 255)
         return ModelResponse(predictions=[{
-            "result": [{
-                "id":             str(uuid4())[:4],
-                "from_name":      from_name,
-                "to_name":        to_name,
-                "type":           "brushlabels",
-                "original_width":  image_width,
-                "original_height": image_height,
-                "image_rotation":  0,
-                "value": {
-                    "format":      "rle",
-                    "rle":         rle,
-                    "brushlabels": [selected_label] if selected_label else [],
+            "result": [
+                {
+                    "id":             str(uuid4())[:4],
+                    "from_name":      from_name,
+                    "to_name":        to_name,
+                    "type":           "brushlabels",
+                    "original_width":  image_width,
+                    "original_height": image_height,
+                    "image_rotation":  0,
+                    "value": {
+                        "format":      "rle",
+                        "rle":         rle,
+                        "brushlabels": [selected_label] if selected_label else [],
+                    },
+                    "score":    best_score,
+                    "readonly": False,
                 },
-                "score":    best_score,
-                "readonly": False,
-            }],
+                {
+                    "id":        str(uuid4())[:4],
+                    "from_name": "scores",
+                    "to_name":   to_name,
+                    "type":      "textarea",
+                    "value":     {"text": ["\n".join(score_lines)]},
+                },
+            ],
             "model_version": self.get("model_version"),
             "score":         best_score,
         }])
