@@ -6,57 +6,47 @@ Same lazy-loading pattern as image backend — checkpoint downloaded at module
 scope, model loaded on first predict() via _ensure_loaded(), after gunicorn
 fork.  Do NOT use --preload.
 
-SAM3.1 video API (facebookresearch/sam3 @ sam3.1 branch)
-----------------------------------------------------------
-  predictor = build_sam3_multiplex_video_predictor(checkpoint_path, use_fa3=False, ...)
-  # Returns Sam3MultiplexVideoPredictor (extends Sam3BasePredictor)
+Predictor selection (auto-detected at startup via import availability)
+----------------------------------------------------------------------
+  1. sam3.1 branch (preferred) — build_sam3_multiplex_video_predictor
+       Returns Sam3MultiplexVideoPredictor; session-based API with PCS text prompts.
+       Set SAM3_VIDEO_CHECKPOINT_FILENAME=sam3.1_multiplex.pt.
 
-  Session lifecycle per request:
-    resp = pred.handle_request({"type": "start_session",
-                                     "resource_path": video_path})
-    session_id = resp["session_id"]
-
-    pred.handle_request({"type": "add_prompt",
-                               "session_id": session_id,
-                               "frame_index": 0,
-                               "text": "optional text prompt",
-                               "bounding_boxes": [[x0, y0, w, h]],   # pixel xywh
+       Session lifecycle:
+         resp       = pred.handle_request({"type": "start_session", "resource_path": …})
+         session_id = resp["session_id"]
+         pred.handle_request({"type": "add_prompt", "session_id": session_id,
+                               "frame_index": 0, "obj_id": 0,
+                               "bounding_boxes": [[x0, y0, w, h]],  # normalised xywh
                                "bounding_box_labels": [1],
-                               "points": [[px, py]],                  # pixel xy
-                               "point_labels": [1],
-                               "obj_id": int,
-                               "clear_old_boxes": False,
-                               "clear_old_points": False})
+                               "text": "optional PCS prompt"})
+         for frame_data in pred.handle_stream_request(
+                 {"type": "propagate_in_video", "session_id": session_id,
+                  "propagation_direction": "forward",
+                  "max_frame_num_to_track": N}):
+             frame_idx = frame_data["frame_index"]
+             outputs   = frame_data.get("outputs", {})
+         pred.handle_request({"type": "close_session", "session_id": session_id})
 
-    for frame_data in pred.handle_stream_request(
-            {"type": "propagate_in_video",
-             "session_id": session_id,
-             "propagation_direction": "both",
-             "max_frame_num_to_track": N}):
-        frame_idx = frame_data["frame_index"]
-        outputs   = frame_data["outputs"]
+  2. sam3 main branch — build_sam3_video_predictor
+       Returns Sam3VideoPredictorMultiGPU; also extends Sam3BasePredictor so
+       handle_request/handle_stream_request and PCS text prompts are supported.
+       Set SAM3_VIDEO_CHECKPOINT_FILENAME=sam3.pt.
+       No YAML config needed — SAM3 uses only checkpoint_path.
 
-    pred.handle_request({"type": "close_session",
-                               "session_id": session_id})
 
-Checkpoint mapping
--------------------
-  sam3.pt             → Sam3VideoPredictorMultiGPU   (old, main branch)
-  sam3.1_multiplex.pt → build_sam3_multiplex_video_predictor (sam3.1 branch, used here)
-
-SAM2 fallback
---------------
-  When sam3 package is not installed, falls back to SAM2 video predictor with
-  the classic init_state / add_new_points / propagate_in_video interface.
-  Text prompts are ignored in that mode.
 """
 from __future__ import annotations
 
 import logging
 import os
-import sys
+
 import tempfile
 import threading
+import gc as _gc
+import time as _time_module
+
+
 from typing import List, Dict, Optional
 from urllib.parse import urlparse, urlunparse, parse_qs
 
@@ -109,6 +99,65 @@ ENABLE_FA3: bool = os.getenv("SAM3_ENABLE_FA3", "false").lower() == "true"
 _autocast_kwargs: Optional[dict] = None  # set in _ensure_loaded after fork
 
 # ── Checkpoint download ────────────────────────────────────────────────────────
+def _setup_precision() -> Optional[dict]:
+    """Detect GPU compute capability and configure autocast precision.
+
+    Precision tiers (based on minimum compute capability across all visible GPUs):
+
+      sm_80+ Ampere (e.g. RTX 3060 Ti sm_86):
+        bfloat16 autocast — SAM3 checkpoint weights are natively bf16; autocast
+        ensures input activations are cast to bf16 to match, avoiding dtype
+        mismatch.  allow_tf32 flags additionally accelerate any remaining fp32
+        ops via TF32 Tensor Core.
+
+      sm_70–79 Volta/Turing (e.g. TITAN V sm_70):
+        bfloat16 autocast — SAM3 weights are natively bf16; must match for
+        correctness.  BF16 has NO dedicated hardware on Volta/Turing (unlike
+        Ampere), so bf16 ops are software-emulated (slower than fp16), but
+        a dtype mismatch crash is worse than a performance penalty.
+
+      sm_61 and below Pascal (e.g. GTX 1080):
+        bfloat16 autocast — same addmm_act constraint as above.  SAM3 was not
+        designed for Pascal; bf16 ops are software-emulated and performance
+        will be poor, but the dtype mismatch must be resolved for correctness.
+
+    Multi-GPU note:
+      torch.autocast is a global context — it cannot be configured per-device.
+      min_major across all visible GPUs determines the tier, so homogeneous
+      GPU setups (all same generation) get the best-fit precision automatically.
+      Override with TORCH_DTYPE=fp16 or TORCH_DTYPE=bf16 when needed.
+    """
+    # Allow manual override via environment variable
+    _dtype_override = os.getenv("TORCH_DTYPE", "").lower()
+    _dtype_map = {"fp16": torch.float16, "float16": torch.float16,
+                  "bf16": torch.bfloat16, "bfloat16": torch.bfloat16}
+    if _dtype_override in _dtype_map:
+        logger.info("Precision: %s autocast — TORCH_DTYPE override", _dtype_override)
+        return {"device_type": "cuda", "dtype": _dtype_map[_dtype_override]}
+
+    if not torch.cuda.is_available():
+        return None
+    n = torch.cuda.device_count()
+    if n == 0:
+        return None
+    min_major = min(torch.cuda.get_device_properties(i).major for i in range(n))
+    if min_major >= 8:  # Ampere (sm_80+): BF16 Tensor Core native; TF32 for fp32 fallback ops
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        logger.info("Precision: bfloat16 autocast + TF32 — Ampere+ (min sm_%d0, %d GPU(s))", min_major, n)
+        return {"device_type": "cuda", "dtype": torch.bfloat16}
+    elif min_major >= 7:  # Volta/Turing (sm_70–79): FP16 Tensor Core native; no TF32
+        logger.info("Precision: bfloat16 autocast — Volta (min sm_%d0, %d GPU(s))", min_major, n)
+        return {"device_type": "cuda", "dtype": torch.bfloat16}
+    else:  # Pascal (sm_60/61) and below: attempt bfloat16; may fail if addmm_act kernel missing
+        logger.warning(
+            "GPU compute capability sm_%d0 detected (Pascal or lower) — "
+            "inference may fail if _addmm_activation bfloat16 kernel is absent on this GPU.",
+            min_major,
+        )
+        return {"device_type": "cuda", "dtype": torch.bfloat16}
+
+
 def _download_with_progress(
     repo_id: str,
     filename: str,
@@ -162,13 +211,40 @@ except Exception as _hf_err:
 # ── Lazy model loading ─────────────────────────────────────────────────────────
 # Same rationale as sam3-image: defer CUDA init to after gunicorn fork.
 _predictor = None
-_USING_SAM2_FALLBACK: bool = False
+# "sam3_multiplex" = sam3.1 branch (build_sam3_multiplex_video_predictor, multiplex objects)
+# "sam3_main"      = sam3 main branch (build_sam3_video_predictor, single GPU)
+# Both use handle_request/handle_stream_request and support PCS text prompts.
+_PREDICTOR_MODE: str = "sam3_multiplex"
 _init_lock = threading.Lock()
+
+_last_used: float = 0.0
+_IDLE_TIMEOUT: int = int(os.getenv("GPU_IDLE_TIMEOUT_SECS", "3600"))  # default: 1 hour
+
+
+def _idle_watchdog() -> None:
+    """Daemon: unloads video predictor and frees VRAM after GPU_IDLE_TIMEOUT_SECS seconds idle."""
+    global _predictor, _last_used
+    while True:
+        _time_module.sleep(60)
+        if _predictor is None:
+            continue
+        if _time_module.monotonic() - _last_used > _IDLE_TIMEOUT:
+            with _init_lock:
+                if _predictor is not None and _time_module.monotonic() - _last_used > _IDLE_TIMEOUT:
+                    logger.info("GPU idle >%ds — unloading video predictor to free VRAM.", _IDLE_TIMEOUT)
+                    _predictor = None
+                    if DEVICE.startswith("cuda"):
+                        torch.cuda.empty_cache()
+                        _gc.collect()
+
+
+_watchdog_thread = threading.Thread(target=_idle_watchdog, daemon=True, name="gpu-idle-watchdog")
+_watchdog_thread.start()
 
 
 def _ensure_loaded() -> None:
-    """Load SAM3 (or SAM2 fallback) video predictor on first call inside the worker."""
-    global _predictor, _USING_SAM2_FALLBACK
+    """Load SAM3 video predictor on first call inside the worker process."""
+    global _predictor, _PREDICTOR_MODE
     if _predictor is not None:
         return
     with _init_lock:
@@ -180,18 +256,34 @@ def _ensure_loaded() -> None:
         _cuda._in_bad_fork = False
         _cuda._initialized = False
 
-        # ── CUDA optimisations (safe here — after fork, CUDA not yet init) ─
+        # ── CUDA precision (safe here — after fork, CUDA not yet init) ────────────
+        # Precision: all CUDA GPUs → bfloat16 autocast (addmm_act constraint); Ampere+ also enables TF32.
         global _autocast_kwargs
-        if DEVICE == "cuda":
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            # TF32 only effective on Ampere (sm_80+); safe to set on sm_70 (TITAN V),
-            # PyTorch honours the flag only when hardware supports it.
-            # bfloat16 autocast: valid on Volta (sm_70) and above.
-            _autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16}
+        _autocast_kwargs = _setup_precision()
 
         try:
             from sam3.model_builder import build_sam3_multiplex_video_predictor  # type: ignore[import]
+
+            # ── FA3 suppression ──────────────────────────────────────────────
+            # sam3/model/model_misc.py::get_sdpa_settings() runs at MODULE import
+            # time and sets USE_FLASH_ATTN=True on Ampere+ GPUs.  At inference,
+            # the attention blocks read this flag and unconditionally execute:
+            #   from sam3.perflib.fa3 import flash_attn_func
+            # which in turn does:
+            #   from flash_attn_interface import flash_attn_func as fa3
+            # If flash-attn-3 is not installed (the default), this raises
+            # ImportError during propagate_in_video — even when use_fa3=False
+            # is passed to the builder (the builder param does not fully override
+            # the module-level flag).
+            # Fix: patch USE_FLASH_ATTN=False on the already-imported module object
+            # before any forward pass, then also clear instance-level flags after build.
+            if not ENABLE_FA3:
+                try:
+                    import sam3.model.model_misc as _sam3_misc  # type: ignore[import]
+                    _sam3_misc.USE_FLASH_ATTN = False
+                    logger.info("Patched sam3.model.model_misc.USE_FLASH_ATTN=False (FA3 disabled).")
+                except Exception:
+                    pass
 
             logger.info("Loading SAM3 multiplex video predictor on %s …", DEVICE)
             _predictor = build_sam3_multiplex_video_predictor(
@@ -201,24 +293,49 @@ def _ensure_loaded() -> None:
             )
             logger.info("SAM3 multiplex video predictor loaded.")
 
+            # Belt-and-suspenders: patch instance-level use_fa3 / use_flash_attn
+            # that may have been cached from USE_FLASH_ATTN during __init__.
+            if not ENABLE_FA3:
+                for _m in _predictor.modules():
+                    for _attr in ("use_fa3", "use_flash_attn"):
+                        if hasattr(_m, _attr):
+                            setattr(_m, _attr, False)
+
         except ImportError as err:
-            _USING_SAM2_FALLBACK = True
+            # ── sam3 main branch fallback ────────────────────────────────────
+            # build_sam3_multiplex_video_predictor is sam3.1-only.
+            # If missing, try sam3 main branch (Sam3VideoPredictorMultiGPU).
+            # It also extends Sam3BasePredictor — same handle_request/
+            # handle_stream_request API and PCS text prompt support.
             logger.warning(
-                "sam3 package import failed (%s) — falling back to SAM2 video predictor. "
-                "Text prompts (PCS) will be IGNORED.",
+                "sam3.1 multiplex predictor unavailable (%s) — trying sam3 main branch …",
                 err,
             )
-            _sam3_src = "/sam3"
-            if _sam3_src not in sys.path:
-                sys.path.insert(0, _sam3_src)
-            from sam2.build_sam import build_sam2_video_predictor  # type: ignore[import]
+            try:
+                from sam3.model_builder import build_sam3_video_predictor  # type: ignore[import]
 
-            _predictor = build_sam2_video_predictor(
-                os.getenv("MODEL_CONFIG", "configs/sam2.1/sam2.1_hiera_l.yaml"),
-                _checkpoint_path,
-                device=DEVICE,
-            )
-            logger.info("SAM2 video predictor loaded (SAM3 fallback).")
+                if not ENABLE_FA3:
+                    try:
+                        import sam3.model.model_misc as _sam3_misc  # type: ignore[import]
+                        _sam3_misc.USE_FLASH_ATTN = False
+                    except Exception:
+                        pass
+
+                logger.info("Loading SAM3 (main) video predictor on %s …", DEVICE)
+                _predictor = build_sam3_video_predictor(
+                    checkpoint_path=_checkpoint_path,
+                    device=DEVICE,
+                )
+                _PREDICTOR_MODE = "sam3_main"
+                logger.info("SAM3 (main) video predictor loaded.")
+
+            except ImportError as err2:
+                raise RuntimeError(
+                    "Neither sam3.1 nor sam3 main branch is available. "
+                    "Install the sam3 package from https://github.com/facebookresearch/sam3 . "
+                    f"Last error: {err2}"
+                ) from err2
+
 
 
 
@@ -239,7 +356,7 @@ class NewModel(LabelStudioMLBase):
     Text prompt (PCS):
       If a TextArea result is present in context, its text is passed as "text"
       to add_prompt(). Works alongside or instead of geometric prompts.
-      Ignored with WARNING when falling back to SAM2.
+      Passed to handle_request add_prompt as "text" field.
     """
 
     def setup(self) -> None:
@@ -255,6 +372,8 @@ class NewModel(LabelStudioMLBase):
     ) -> ModelResponse:
 
         _ensure_loaded()  # CUDA init deferred to worker process (after gunicorn fork)
+        global _last_used
+        _last_used = _time_module.monotonic()
 
         from_name, to_name, value = self.get_first_tag_occurence("VideoRectangle", "Video")
 
@@ -285,15 +404,6 @@ class NewModel(LabelStudioMLBase):
         if not geo_prompts and not text_prompt:
             return ModelResponse(predictions=[])
 
-
-        if text_prompt and _USING_SAM2_FALLBACK:
-            logger.warning(
-                "Text prompt '%s' ignored — SAM2 fallback does not support PCS.",
-                text_prompt,
-            )
-            text_prompt = None
-            if not geo_prompts:
-                return ModelResponse(predictions=[])
 
         # ── Resolve video path ─────────────────────────────────────────────────
         video_url = _to_internal_url(task["data"][value])
@@ -332,14 +442,9 @@ class NewModel(LabelStudioMLBase):
         # ── Dispatch to correct predictor path ─────────────────────────────────
         score_lines: list[str] = []
         try:
-            if _USING_SAM2_FALLBACK:
-                sequence, all_obj_ids = self._predict_sam2(
-                    video_path, geo_prompts, fps,
-                )
-            else:
-                sequence, all_obj_ids, score_lines = self._predict_sam3(
-                    video_path, geo_prompts, text_prompt, fps,
-                )
+            sequence, all_obj_ids, score_lines = self._predict_sam3(
+                video_path, geo_prompts, text_prompt, fps,
+            )
         except Exception as exc:
             logger.error("Video predict failed: %s", exc, exc_info=True)
             return ModelResponse(predictions=[])
@@ -602,126 +707,6 @@ class NewModel(LabelStudioMLBase):
 
         return sequence, all_obj_ids, score_lines
 
-    # ── SAM2 fallback predict path ─────────────────────────────────────────────
-
-    def _predict_sam2(
-        self,
-        video_path: str,
-        geo_prompts: list[dict],
-        fps: float,
-    ) -> tuple[list[dict], set[str]]:
-        """Run SAM2 video predictor (manual cv2 frame splitting)."""
-        ctx = torch.autocast(**_autocast_kwargs) if _autocast_kwargs else None
-        if ctx:
-            ctx.__enter__()
-        try:
-            return self._predict_sam2_inner(video_path, geo_prompts, fps)
-        finally:
-            if ctx:
-                ctx.__exit__(None, None, None)
-
-    def _predict_sam2_inner(
-        self,
-        video_path: str,
-        geo_prompts: list[dict],
-        fps: float,
-    ) -> tuple[list[dict], set[str]]:
-        all_obj_ids: set[str] = {p["obj_id"] for p in geo_prompts}
-        obj_id_map: dict[str, int] = {oid: i for i, oid in enumerate(all_obj_ids)}
-
-        first_frame = min(p["frame_idx"] for p in geo_prompts)
-        last_frame  = max(p["frame_idx"] for p in geo_prompts)
-
-        with tempfile.TemporaryDirectory() as frame_dir:
-            frames = list(self._split_frames(
-                video_path, frame_dir,
-                start_frame=first_frame,
-                end_frame=last_frame + MAX_FRAMES_TO_TRACK + 1,
-            ))
-            if not frames:
-                logger.error("No frames extracted from video: %s", video_path)
-                return [], all_obj_ids
-
-            _frame_path, first_img = frames[0]
-            height, width, _ = first_img.shape
-
-            # Per-request state — no shared cache (not thread-safe with THREADS > 1)
-            inference_state = _predictor.init_state(video_path=frame_dir)
-            _predictor.reset_state(inference_state)
-
-            # ── Build per-(frame, obj_id) point buckets ────────────────────
-            # Boxes → converted to 5-point representation via _rect_to_keypoints.
-            # Positive keypoints → appended directly.
-            # Negative (background) keypoints → routed to box-defined objects on
-            # the same frame; if none exist, routed to own obj_id.
-            from collections import defaultdict
-            prompts_by_frame_sam2: dict[int, list[dict]] = defaultdict(list)
-            for p in geo_prompts:
-                prompts_by_frame_sam2[p["frame_idx"]].append(p)
-
-            by_frame_obj: dict[tuple, dict] = defaultdict(lambda: {"pts": [], "lbs": []})
-
-            for frame_idx, frame_prompts in sorted(prompts_by_frame_sam2.items()):
-                box_obj_ids_in_frame = [
-                    p["obj_id"] for p in frame_prompts if p["type"] == "box"
-                ]
-                for p in frame_prompts:
-                    key = (frame_idx, p["obj_id"])
-                    if p["type"] == "box":
-                        kp_pts, kp_lbs = self._rect_to_keypoints(
-                            p["x_pct"], p["y_pct"],
-                            p["w_pct"], p["h_pct"],
-                            width, height,
-                        )
-                        by_frame_obj[key]["pts"].extend(kp_pts.tolist())
-                        by_frame_obj[key]["lbs"].extend(kp_lbs.tolist())
-                    elif p["type"] == "point":
-                        px = p["x_pct"] / 100.0 * width
-                        py = p["y_pct"] / 100.0 * height
-                        if p["is_positive"]:
-                            by_frame_obj[key]["pts"].append([px, py])
-                            by_frame_obj[key]["lbs"].append(1)
-                        else:
-                            targets = box_obj_ids_in_frame if box_obj_ids_in_frame else [p["obj_id"]]
-                            for oid in targets:
-                                by_frame_obj[(frame_idx, oid)]["pts"].append([px, py])
-                                by_frame_obj[(frame_idx, oid)]["lbs"].append(0)
-
-            for (frame_idx, obj_id), data in sorted(by_frame_obj.items()):
-                if not data["pts"]:
-                    continue
-                _predictor.add_new_points(
-                    inference_state=inference_state,
-                    frame_idx=frame_idx,
-                    obj_id=obj_id_map[obj_id],
-                    points=np.array(data["pts"], dtype=np.float32),
-                    labels=np.array(data["lbs"], dtype=np.int32),
-                )
-
-            sequence: list[dict] = []
-            for out_frame_idx, out_obj_ids, out_mask_logits in _predictor.propagate_in_video(
-                inference_state=inference_state,
-                start_frame_idx=last_frame,
-                max_frame_num_to_track=MAX_FRAMES_TO_TRACK,
-            ):
-                real_frame = out_frame_idx + first_frame
-                for i in range(len(out_obj_ids)):
-                    mask = (out_mask_logits[i] > 0.0).cpu().numpy()
-                    bbox = self._mask_to_bbox_pct(mask)
-                    if bbox:
-                        sequence.append({
-                            "frame":    real_frame + 1,
-                            "x":        bbox["x"],
-                            "y":        bbox["y"],
-                            "width":    bbox["width"],
-                            "height":   bbox["height"],
-                            "enabled":  True,
-                            "rotation": 0,
-                            "time":     out_frame_idx / fps,
-                        })
-
-        return sequence, all_obj_ids
-
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _get_geo_prompts(self, context: dict) -> list[dict]:
@@ -793,27 +778,6 @@ class NewModel(LabelStudioMLBase):
         return None
 
     @staticmethod
-    def _rect_to_keypoints(
-        x_pct: float, y_pct: float, w_pct: float, h_pct: float,
-        width: int, height: int,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Convert percentage rect to 5 keypoints (center + 4 cardinal midpoints)."""
-        x = x_pct / 100.0
-        y = y_pct / 100.0
-        w = w_pct / 100.0
-        h = h_pct / 100.0
-        kps = [
-            [x + w / 2,       y + h / 2      ],  # center
-            [x + w / 4,       y + h / 2      ],  # left-center
-            [x + 3 * w / 4,   y + h / 2      ],  # right-center
-            [x + w / 2,       y + h / 4      ],  # top-center
-            [x + w / 2,       y + 3 * h / 4  ],  # bottom-center
-        ]
-        pts = np.array(kps, dtype=np.float32)
-        pts[:, 0] *= width
-        pts[:, 1] *= height
-        return pts, np.ones(len(kps), dtype=np.int32)
-
     @staticmethod
     def _mask_to_bbox_pct(mask: np.ndarray) -> Optional[dict]:
         """Convert binary mask to percentage bounding box. Returns None if empty."""
@@ -866,33 +830,3 @@ class NewModel(LabelStudioMLBase):
             count += 1
         cap.release()
         return count
-
-    @staticmethod
-    def _split_frames(
-        video_path: str,
-        frame_dir: str,
-        start_frame: int = 0,
-        end_frame: int = 100,
-    ):
-        """cv2 frame splitter — only used in SAM2 fallback path."""
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            logger.error("Cannot open video: %s", video_path)
-            return
-        frame_count = rel = 0
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if frame_count < start_frame:
-                frame_count += 1
-                continue
-            if frame_count >= end_frame:
-                break
-            fname = os.path.join(frame_dir, f"{rel:05d}.jpg")
-            if not os.path.exists(fname):
-                cv2.imwrite(fname, frame)
-            yield fname, frame
-            frame_count += 1
-            rel += 1
-        cap.release()

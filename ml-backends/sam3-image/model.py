@@ -30,6 +30,15 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import gc as _gc
+import time as _time_module
+
+try:
+    from accelerate import dispatch_model, infer_auto_device_map  # type: ignore[import]
+    _HAS_ACCELERATE: bool = True
+except ImportError:
+    _HAS_ACCELERATE: bool = False
+
 from typing import List, Dict, Optional
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
@@ -79,6 +88,57 @@ RETURN_ALL_MASKS: bool = os.getenv("SAM3_RETURN_ALL_MASKS", "false").lower() == 
 _autocast_kwargs: Optional[dict] = None  # set in _ensure_loaded after fork
 
 # ── Checkpoint download ────────────────────────────────────────────────────────
+def _setup_precision() -> Optional[dict]:
+    """Detect GPU compute capability and configure autocast precision.
+
+    ALL CUDA tiers use bfloat16 autocast.  This is a hard requirement imposed by
+    sam3/perflib/fused.py::addmm_act, which unconditionally casts fc1 inputs and
+    weights to bfloat16 (`.to(torch.bfloat16)`) before calling the fused kernel.
+    Because fc1's output is always bf16, the downstream fc2 layer must also receive
+    bf16 input — its weight must be cast to bf16.  torch.autocast(dtype=bfloat16)
+    achieves this transparently for all standard linear/matmul ops at runtime.
+    Without autocast, any fp32 weight in fc2 causes:
+      RuntimeError: mat1 and mat2 must have the same dtype, but got BFloat16 and Float
+
+    Performance notes per GPU generation:
+      sm_80+ Ampere: native BF16 Tensor Core — fast path; TF32 enabled for any
+        remaining fp32 ops (allow_tf32 flags).
+      sm_70–79 Volta/Turing: no native BF16 hardware; bf16 ops are software-
+        emulated (slower than fp32, but correctness trumps speed here).
+      sm_61 and below Pascal: same software-emulation caveat as Volta.
+        SAM3 was not designed for Pascal; performance will be poor.
+
+    Multi-GPU note:
+      torch.autocast is a global context — it cannot be configured per-device.
+      min_major across all visible GPUs determines the tier.
+      Override with TORCH_DTYPE=fp16 or TORCH_DTYPE=bf16 when needed.
+    """
+    # Allow manual override via environment variable
+    _dtype_override = os.getenv("TORCH_DTYPE", "").lower()
+    _dtype_map = {"fp16": torch.float16, "float16": torch.float16,
+                  "bf16": torch.bfloat16, "bfloat16": torch.bfloat16}
+    if _dtype_override in _dtype_map:
+        logger.info("Precision: %s autocast — TORCH_DTYPE override", _dtype_override)
+        return {"device_type": "cuda", "dtype": _dtype_map[_dtype_override]}
+
+    if not torch.cuda.is_available():
+        return None
+    n = torch.cuda.device_count()
+    if n == 0:
+        return None
+    min_major = min(torch.cuda.get_device_properties(i).major for i in range(n))
+    if min_major >= 8:  # Ampere (sm_80+): BF16 Tensor Core native; TF32 for fp32 fallback ops
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        logger.info("Precision: bfloat16 autocast + TF32 — Ampere+ (min sm_%d0, %d GPU(s))", min_major, n)
+        return {"device_type": "cuda", "dtype": torch.bfloat16}
+    elif min_major >= 7:  # Volta/Turing (sm_70–79): bf16 software-emulated; no TF32
+        logger.info("Precision: bfloat16 autocast — Volta/Turing (min sm_%d0, %d GPU(s))", min_major, n)
+        return {"device_type": "cuda", "dtype": torch.bfloat16}
+    else:  # Pascal (sm_60/61) and below: bfloat16 autocast (image model uses main branch, no addmm_act)
+        logger.info("Precision: bfloat16 autocast — Pascal (min sm_%d0, %d GPU(s))", min_major, n)
+        return {"device_type": "cuda", "dtype": torch.bfloat16}
+
 def _download_with_progress(
     repo_id: str,
     filename: str,
@@ -139,6 +199,33 @@ except Exception as _hf_err:
 _processor = None   # Sam3Processor
 _init_lock = threading.Lock()
 
+_last_used: float = 0.0
+_IDLE_TIMEOUT: int = int(os.getenv("GPU_IDLE_TIMEOUT_SECS", "3600"))  # default: 1 hour
+
+
+def _idle_watchdog() -> None:
+    """Daemon: unloads model and frees VRAM after GPU_IDLE_TIMEOUT_SECS seconds idle.
+
+    Checked every 60 s. Timer resets on each predict() call via _last_used update.
+    """
+    global _processor, _last_used
+    while True:
+        _time_module.sleep(60)
+        if _processor is None:
+            continue
+        if _time_module.monotonic() - _last_used > _IDLE_TIMEOUT:
+            with _init_lock:
+                if _processor is not None and _time_module.monotonic() - _last_used > _IDLE_TIMEOUT:
+                    logger.info("GPU idle >%ds — unloading model to free VRAM.", _IDLE_TIMEOUT)
+                    _processor = None
+                    if DEVICE.startswith("cuda"):
+                        torch.cuda.empty_cache()
+                        _gc.collect()
+
+
+_watchdog_thread = threading.Thread(target=_idle_watchdog, daemon=True, name="gpu-idle-watchdog")
+_watchdog_thread.start()
+
 
 def _ensure_loaded() -> None:
     """Load SAM3 model on first call inside the worker process."""
@@ -160,14 +247,10 @@ def _ensure_loaded() -> None:
         _cuda._in_bad_fork = False
         _cuda._initialized = False
 
-        # ── CUDA optimisations (safe here — after fork, before CUDA init) ──
+        # ── CUDA precision (safe here — after fork, before CUDA init) ─────────────
+        # Precision: all CUDA GPUs → bfloat16 autocast (addmm_act constraint); Ampere+ also enables TF32.
         global _autocast_kwargs
-        if DEVICE == "cuda":
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            # TF32 only effective on Ampere (sm_80+); harmless on Volta (sm_70).
-            # bfloat16 autocast valid from Volta (sm_70) onward.
-            _autocast_kwargs = {"device_type": "cuda", "dtype": torch.bfloat16}
+        _autocast_kwargs = _setup_precision()
 
         from sam3.model_builder import build_sam3_image_model           # type: ignore[import]
         from sam3.model.sam3_image_processor import Sam3Processor       # type: ignore[import]
@@ -181,6 +264,20 @@ def _ensure_loaded() -> None:
             enable_inst_interactivity=False,
             compile=False,
         )
+        # Multi-GPU: dispatch model layers across all available GPUs (device_map="auto").
+        # Uses HuggingFace accelerate; falls back gracefully if not installed.
+        # Each gunicorn worker process runs this independently after fork.
+        if torch.cuda.device_count() > 1 and _HAS_ACCELERATE:
+            _max_mem = {
+                i: torch.cuda.get_device_properties(i).total_memory
+                for i in range(torch.cuda.device_count())
+            }
+            _dev_map = infer_auto_device_map(_sam_model, max_memory=_max_mem)
+            _sam_model = dispatch_model(_sam_model, device_map=_dev_map)
+            logger.info(
+                "SAM3 image model dispatched across %d GPU(s) via device_map=auto.",
+                torch.cuda.device_count(),
+            )
         _processor = Sam3Processor(
             _sam_model,
             resolution=1008,
@@ -222,6 +319,8 @@ class NewModel(LabelStudioMLBase):
         """Return BrushLabels prediction(s) for the given prompt context."""
 
         _ensure_loaded()  # CUDA init deferred to worker process (after gunicorn fork)
+        global _last_used
+        _last_used = _time_module.monotonic()
 
         from_name, to_name, value = self.get_first_tag_occurence("BrushLabels", "Image")
 

@@ -3,7 +3,7 @@
 # Base: pytorch/pytorch (includes torch + CUDA + Python 3.12)
 # Build: single-stage with BuildKit pip cache mounts
 #
-# Requirements: NVIDIA driver >= 535.x (CUDA 12.6)
+# Requirements: NVIDIA driver >= 535.x (CUDA 12.6); minimum GPU: Turing (sm_75+)
 # Build: DOCKER_BUILDKIT=1 docker compose build sam3-image-backend
 # ============================================================
 

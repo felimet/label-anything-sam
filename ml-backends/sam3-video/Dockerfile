@@ -3,7 +3,7 @@
 # Base: pytorch/pytorch (includes torch + CUDA + Python 3.12)
 # Build: single-stage with BuildKit pip cache mounts
 #
-# Requirements: NVIDIA driver >= 535.x (CUDA 12.6)
+# Requirements: NVIDIA driver >= 535.x (CUDA 12.6); minimum GPU: Turing (sm_75+)
 # Build: DOCKER_BUILDKIT=1 docker compose build sam3-video-backend
 # ============================================================
 
@@ -53,10 +53,11 @@ RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
 
 # ── SAM3 from source (no PyPI package) ───────────────────────
 # Branch / commit selection:
-#   sam3.1  → matches sam3.1_multiplex.pt (tracker.model.* keys, dual backbone)
-#   main    → old flat-key architecture; incompatible with any current HF checkpoint
+#   sam3.1  → build_sam3_multiplex_video_predictor; checkpoint: sam3.1_multiplex.pt (recommended)
+#   main    → build_sam3_video_predictor; checkpoint: sam3.pt (lighter; works on Pascal sm_61)
 # Override via docker-compose.ml.yml build.args or --build-arg SAM3_COMMIT=<ref>
-ARG SAM3_COMMIT=sam3.1
+# NOTE: git clone requires internet access during docker build. Exit code 128 = network failure.
+ARG SAM3_COMMIT=main
 RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
     git clone --depth 1 --branch ${SAM3_COMMIT} \
         https://github.com/facebookresearch/sam3.git /sam3 \
@@ -65,7 +66,7 @@ RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
 
 # ── Optional: Flash Attention 3 + cc_torch (inference speedup) ───
 # Enabled via: docker compose build --build-arg ENABLE_FA3=true sam3-video-backend
-# FA3 is effective for video: build_sam3_video_predictor(use_fa3=True).
+# FA3 is effective for video: build_sam3_multiplex_video_predictor(use_fa3=True).
 # Also set SAM3_ENABLE_FA3=true in .env to activate at runtime.
 ARG ENABLE_FA3=false
 RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \

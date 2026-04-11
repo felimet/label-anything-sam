@@ -23,16 +23,17 @@ services:
       args:
         # sam3.1 → matches sam3.1_multiplex.pt / current HF checkpoints
         # main   → old architecture, incompatible with current checkpoints
-        SAM3_COMMIT: sam3.1
+        SAM3_COMMIT: main
     restart: unless-stopped
     env_file:
       - .env.ml
     environment:
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
-      # GPU assignment: image backend → GPU 0, video backend → GPU 1
-      # CUDA_VISIBLE_DEVICES remaps physical GPUs; inside container "cuda:0" = GPU 0
-      - CUDA_VISIBLE_DEVICES=0
+      # GPU assignment and worker count are derived from SAM3_IMAGE_GPU_INDEX /
+      # SAM3_IMAGE_WORKERS (set in .env.ml) inside start.sh at container startup.
+      # Docker Compose ${VAR} substitution reads from the HOST's .env, NOT from
+      # env_file:, so those variables cannot be expanded here.
     volumes:
       - hf-cache:/home/appuser/.cache/huggingface
       - ./ml-backends/sam3-image/model.py:/app/model.py:ro
@@ -61,15 +62,20 @@ services:
       context: ./ml-backends/sam3-video
       dockerfile: Dockerfile
       args:
-        SAM3_COMMIT: sam3.1
+        # sam3.1 → matches sam3.1_multiplex.pt / current HF checkpoints
+        # main   → old architecture, incompatible with current checkpoints
+        SAM3_COMMIT: main
+        ENABLE_FA3: false
     restart: unless-stopped
     env_file:
       - .env.ml
     environment:
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
-      # GPU assignment: video backend → GPU 1 (image backend uses GPU 0)
-      - CUDA_VISIBLE_DEVICES=1
+      # GPU assignment and worker count are derived from SAM3_VIDEO_GPU_INDEX /
+      # SAM3_VIDEO_WORKERS (set in .env.ml) inside start.sh at container startup.
+      # Docker Compose ${VAR} substitution reads from the HOST's .env, NOT from
+      # env_file:, so those variables cannot be expanded here.
     volumes:
       - hf-cache:/home/appuser/.cache/huggingface
       - ./ml-backends/sam3-video/model.py:/app/model.py:ro
