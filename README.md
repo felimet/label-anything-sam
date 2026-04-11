@@ -1,6 +1,8 @@
-# label-studio-compose
+# label-anything-sam
 
-Production-ready [Label Studio](https://labelstud.io) stack: PostgreSQL · Redis · MinIO (S3) · Nginx · Cloudflare Tunnel · SAM3 interactive segmentation.
+[Label Studio](https://labelstud.io) SAM3/3.1 Full Deployment Setup: PostgreSQL · Redis · MinIO (S3) · Nginx · Cloudflare Tunnel · SAM3/3.1 Interactive Image Segmentation
+
+> As of April 11, 2026, [Label Studio ml-backend](https://github.com/HumanSignal/label-studio-ml-backend) has not yet been updated to include [Meta (Facebook) SAM 3: Segment Anything with Concepts](https://github.com/facebookresearch/sam3) as a backend segmentation model. This repo therefore provides a custom Label Studio ML Backend implementation based on SAM 3 for users who need direct integration, following the folder structure of [Label Studio ml-backend](https://github.com/HumanSignal/label-studio-ml-backend) as closely as possible. See `./ml-backends` for details.
 
 > **繁體中文說明** → [README.zh-TW.md](README.zh-TW.md)
 
@@ -8,8 +10,8 @@ Production-ready [Label Studio](https://labelstud.io) stack: PostgreSQL · Redis
 
 | Service | Image | Role |
 |---------|-------|------|
-| `label-studio` | `heartexlabs/label-studio:20260404.151117-fb-bros-956-f3692362` | Labeling UI + API |
-| `db` | `postgres:17` | Metadata store |
+| `label-studio` | `heartexlabs/label-studio:latest` | Labeling UI + API |
+| `pg-db` | `postgres:17` | Metadata store |
 | `redis` | `redis:8.6.2` | Task queue / cache |
 | `minio` | `minio/minio:RELEASE.2025-04-22T22-12-26Z` ⚠️ | S3-compatible object storage |
 | `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | One-shot bucket + CORS setup |
@@ -30,8 +32,8 @@ Production-ready [Label Studio](https://labelstud.io) stack: PostgreSQL · Redis
 ## Quick Start
 
 ```bash
-git clone https://github.com/felimet/label-studio-compose
-cd label-studio-compose
+git clone https://github.com/felimet/label-anything-sam
+cd label-anything-sam
 
 # 1. Core stack
 cp .env.example .env
@@ -75,9 +77,10 @@ Connect MinIO storage in Label Studio:
 | Guide | Contents |
 |-------|----------|
 | [docs/configuration.md](docs/configuration.md) | `.env` variable reference |
-| [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust setup + WAF rules |
+| [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust setup + WAF rules + alternatives |
 | [docs/sam3-backend.md](docs/sam3-backend.md) | SAM3 model setup + annotation workflow |
 | [docs/architecture.md](docs/architecture.md) | Service topology, volumes, networking |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operations guide (health checks, upgrades, troubleshooting) |
 
 ## License
 

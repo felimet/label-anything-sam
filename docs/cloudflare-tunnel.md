@@ -66,6 +66,56 @@
    - Rule type：`Service Token`
    - 建立一組 Service Token 供 `sam3-ml-backend` 使用，或改用 IP CIDR 放行內部容器網段
 
+## 無 Cloudflare 帳號的替代方案
+
+若無 Cloudflare 帳號或不想使用 Zero Trust，有兩個替代選項：
+
+### 選項 1：使用 ngrok
+
+[ngrok](https://ngrok.com/) 將本機埠對應至公開 HTTPS URL，無需設定 DNS 或防火牆。
+
+```bash
+# 安裝 ngrok（從 https://ngrok.com/download）
+ngrok http 18090   # 暴露 nginx 埠（見 docker-compose.override.yml）
+```
+
+ngrok 會輸出公開 URL，例如 `https://abc123.ngrok.io`，複製此 URL 至 `.env`：
+
+```bash
+LABEL_STUDIO_HOST=https://abc123.ngrok.io
+```
+
+重啟 Label Studio：
+```bash
+docker compose up -d --no-deps label-studio
+```
+
+**優點**：無需 DNS 設定、無需靜態公開 IP、立即可用  
+**缺點**：ngrok 免費方案有帶寬限制、URL 重啟後變更（可升級到付費方案固定 URL）
+
+### 選項 2：純本地存取（localhost）
+
+若只需在本機或內部網路存取，無需對外公開：
+
+```bash
+# .env
+LABEL_STUDIO_HOST=http://localhost:18090
+```
+
+**訪問方式**：
+- 本機瀏覽器：`http://localhost:18090`
+- 同一網路其他電腦：`http://<your-machine-ip>:18090`（例如 `http://192.168.1.100:18090`）
+- 跨越網際網路：不支援
+
+**ML 後端連接**：
+- ML backends（sam3-image, sam3-video）使用內部 Docker network 自動連接，不受 `LABEL_STUDIO_HOST` 影響
+- 後端透過 `http://label-studio:8080`（容器內 DNS）連接應用，與外部公開 URL 無關
+
+**優點**：無需外部服務、最簡單、最安全  
+**缺點**：無法遠端存取、無法公開分享註釋結果
+
+---
+
 ## 故障排除
 
 | 症狀 | 可能原因 | 解決方式 |

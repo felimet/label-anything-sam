@@ -1,11 +1,12 @@
-name: label-studio
+name: label-anything-sam
 
 # ============================================================
 # Label Studio — Full Stack
 # Services: PostgreSQL · Redis · MinIO · Label Studio · Nginx
 # Cloudflare Tunnel routes:
 #   label-studio.example.com → nginx:80 → label-studio:8080
-#   minio.example.com        → minio:9000 (GET/HEAD WAF rule on CF)
+#   minio-api.example.com        → minio:9000 (GET/HEAD WAF rule on CF)
+#   minio-console.example.com        → minio:9001 (GET/HEAD WAF rule on CF)
 # ============================================================
 
 x-logging: &default-logging
@@ -16,7 +17,7 @@ x-logging: &default-logging
 
 services:
   # ── PostgreSQL ──────────────────────────────────────────────
-  db:
+  pg-db:
     image: "postgres:${POSTGRES_VERSION:-17}"
     restart: unless-stopped
     logging: *default-logging
@@ -103,11 +104,11 @@ services:
 
   # ── Label Studio ────────────────────────────────────────────
   label-studio:
-    image: "heartexlabs/label-studio:${LABEL_STUDIO_VERSION:-20260404.151117-fb-bros-956-f3692362}"
+    image: "heartexlabs/label-studio:latest"
     restart: unless-stopped
     logging: *default-logging
     depends_on:
-      db:
+      pg-db:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -117,7 +118,7 @@ services:
     environment:
       # Database
       - DJANGO_DB=default
-      - POSTGRE_HOST=db
+      - POSTGRE_HOST=pg-db
       - POSTGRE_PORT=5432
       - POSTGRE_NAME=${POSTGRES_DB:-labelstudio}
       - POSTGRE_USER=${POSTGRES_USER:-labelstudio}
@@ -156,8 +157,8 @@ services:
       - DJANGO_LOG_LEVEL=WARNING
       - LOG_LEVEL=WARNING
     volumes:
-      - ./label-studio-data:/label-studio/data
-      - ./label-studio-data/local_storage_file:/label-studio/data/file
+      - ./ls-data:/label-studio/data:rw
+      - ./ls-data/file:/label-studio/data/file:rw
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
@@ -178,6 +179,8 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ls-data:/label-studio/data:rw
+      - ./ls-data/file:/label-studio/data/file:rw
     healthcheck:
       test: ["CMD-SHELL", "nginx -t && curl -sf http://localhost/health || exit 1"]
       interval: 30s

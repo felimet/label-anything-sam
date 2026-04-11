@@ -14,8 +14,8 @@
 
 ```bash
 # Clone
-git clone https://github.com/felimet/label-studio-compose
-cd label-studio-compose
+git clone https://github.com/felimet/label-anything-sam
+cd label-anything-sam
 
 # Configure environment
 cp .env.example .env
@@ -43,12 +43,12 @@ Dev override ports ([docker-compose.override.yml](../docker-compose.override.yml
 <!-- AUTO-GENERATED from docker-compose.override.yml -->
 | Service | Host port | Notes |
 |---------|-----------|-------|
-| nginx | 18090 | Label Studio 反向代理入口 |
-| label-studio | 18086 | Django 應用直連（繞過 nginx） |
-| minio API | 19000 | S3 端點（`aws s3`、SDK、presigned URL） |
-| minio console | 19001 | MinIO 後台管理 UI（`http://localhost:19001`） |
-| postgres | 5433 | 避免與本機 PostgreSQL 衝突 |
-| redis | 6380 | 避免與本機 Redis 衝突 |
+| nginx | 18090 | Label Studio reverse proxy entry point |
+| label-studio | 18086 | Django app direct access (bypass nginx) |
+| minio API | 19000 | S3 endpoint (`aws s3`, SDK, presigned URL) |
+| minio console | 19001 | MinIO admin UI (`http://localhost:19001`) |
+| postgres | 5433 | Avoid conflict with local PostgreSQL |
+| redis | 6380 | Avoid conflict with local Redis |
 <!-- END AUTO-GENERATED -->
 
 > **Windows 注意**：8000–9000 附近的 port 常被 Hyper-V 保留；若 bind 失敗改用 18000+ 範圍。

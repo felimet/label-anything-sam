@@ -1,4 +1,4 @@
-name: label-studio
+name: label-anything-sam
 
 # ============================================================
 # Local Development Override
@@ -20,7 +20,7 @@ services:
       - "19000:9000"   # API (S3 endpoint)
       - "19001:9001"   # MinIO Console UI
 
-  db:
+  pg-db:
     ports:
       - "5433:5432"   # Avoid conflict with local PostgreSQL
 

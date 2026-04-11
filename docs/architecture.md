@@ -77,8 +77,8 @@ sequenceDiagram
 | `./postgres-data` | bind mount | db | PostgreSQL 資料檔 |
 | `./redis-data` | bind mount | redis | Redis AOF / RDB |
 | `./minio-data` | bind mount | minio | 物件儲存資料 |
-| `./label-studio-data` | bind mount | label-studio | 媒體檔、匯出、上傳；host 端可直接觀察 |
-| `./label-studio-data/local_storage_file` | bind mount | label-studio | Local files storage 根目錄（容器內 `/label-studio/data/file`） |
+| `./ls-data` | bind mount | label-studio | 媒體檔、匯出、上傳；host 端可直接觀察 |
+| `./ls-data/file` | bind mount | label-studio | Local files storage 根目錄（容器內 `/label-studio/data/file`） |
 | `hf-cache` | named volume | sam3-image-backend, sam3-video-backend | HuggingFace Hub 快取（`~/.cache/huggingface`） |
 | `sam3-image-models` | named volume | sam3-image-backend | SAM3 影像模型權重（`/data/models`） |
 | `sam3-video-models` | named volume | sam3-video-backend | SAM3 影片模型權重（`/data/models`） |
@@ -109,6 +109,29 @@ make ml-down  # 停止所有服務（含核心 + SAM3）
 ```
 
 `docker-compose.ml.yml` 不設定 `name:` 欄位，避免覆蓋 base project name 而造成網路隔離。
+
+## Nginx 架構設計
+
+本專案使用**獨立的 nginx:alpine 容器**作為反向代理，而非使用官方 Label Studio 映像中內建的 nginx。這個設計選擇提供更高的架構清晰度與靈活性：
+
+| 面向 | 本專案設計 | 官方捆綁式 nginx |
+|------|----------|-----------|
+| 容器隔離 | nginx 與 Label Studio 分離 | 同一容器內 nginx + app |
+| Volume 需求 | nginx 無需掛載資料 volume（僅代理） | nginx 需掛載 `/label-studio/data` 以直接提供媒體 |
+| 設定複雜度 | 標準 nginx 設定檔；易於自訂 WAF、客製化首頁等 | nginx 設定內嵌於 LS 程式碼 |
+| 關注點分離 | 應用層（LS）與網路層（nginx）明確分離 | 邏輯耦合度高 |
+
+**本專案 nginx 流程**：
+```
+使用者請求 → nginx:80 → label-studio:8080 → 回傳資料給瀏覽器
+```
+
+nginx 純粹充當反向代理角色，將所有請求轉發至 Label Studio app。Label Studio 以內部 URL（`http://minio:9000`）呼叫 MinIO；Presigned URL 直接由 Label Studio 生成並傳給前端，瀏覽器透過 Cloudflare CDN 直接取得檔案。
+
+**為何不在 nginx 中掛載資料 volume**：
+- nginx 不需要存取磁碟上的媒體檔（所有檔案存取均走 Label Studio 應用邏輯）
+- `./ls-data/` 內的檔案用於 Label Studio 的 Local Files Storage 功能，nginx 無需存取
+- 若確實需要 nginx 直接提供靜態檔案，可在 `docker-compose.override.yml` 額外掛載（見 [configuration.md](configuration.md#本機資料目錄說明)）
 
 ## 安全設計決策
 

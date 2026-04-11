@@ -1,5 +1,6 @@
-# claudeignore
+# agent ignore
 .claude/
+.omc/
 
 # Secrets — NEVER commit
 .env

@@ -1,6 +1,8 @@
-# label-studio-compose
+# label-anything-sam
 
-生產就緒的 [Label Studio](https://labelstud.io) 完整部署方案：PostgreSQL · Redis · MinIO (S3) · Nginx · Cloudflare Tunnel · SAM3 互動式影像分割。
+[Label Studio](https://labelstud.io) SAM3/3.1 完整部署方案：PostgreSQL · Redis · MinIO (S3) · Nginx · Cloudflare Tunnel · SAM3/3.1 互動式影像分割。
+
+> 截至 2026 年 4 月 11 日 [Label Studio ml-backend](https://github.com/HumanSignal/label-studio-ml-backend) 尚未更新加入 [Meta (Facebook) SAM 3: Segment Anything with Concepts](https://github.com/facebookresearch/sam3) 後端分割模型，故在本 repo 中提供基於 SAM 3 的 Label Studio ML Backend 自訂實作，供有需求的使用者直接整合。並盡可能的符合 [Label Studio ml-backend](https://github.com/HumanSignal/label-studio-ml-backend) 資料夾結構，詳見 `./ml-backends`。
 
 > **English documentation** → [README.md](README.md)
 
@@ -8,8 +10,8 @@
 
 | 服務 | 映像 | 用途 |
 |------|------|------|
-| `label-studio` | `heartexlabs/label-studio:20260404.151117-fb-bros-956-f3692362` | 標注 UI + API |
-| `db` | `postgres:17` | 資料庫 |
+| `label-studio` | `heartexlabs/label-studio:latest` | 標注 UI + API |
+| `pg-db` | `postgres:17` | 資料庫 |
 | `redis` | `redis:8.6.2` | 任務佇列 / 快取 |
 | `minio` | `minio/minio:RELEASE.2025-04-22T22-12-26Z` ⚠️ | S3 相容物件儲存 |
 | `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | 一次性 bucket + CORS 初始化 |
@@ -30,8 +32,8 @@
 ## 快速開始
 
 ```bash
-git clone https://github.com/felimet/label-studio-compose
-cd label-studio-compose
+git clone https://github.com/felimet/label-anything-sam
+cd label-anything-sam
 
 # 1. 核心服務
 cp .env.example .env
@@ -75,9 +77,10 @@ make ml-up
 | 文件 | 內容 |
 |------|------|
 | [docs/configuration.md](docs/configuration.md) | `.env` 環境變數說明 |
-| [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust 設定 + WAF 規則 |
+| [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust 設定 + WAF 規則 + 替代方案 |
 | [docs/sam3-backend.md](docs/sam3-backend.md) | SAM3 模型設定 + 標注流程 |
 | [docs/architecture.md](docs/architecture.md) | 服務拓撲、Volume、網路 |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | 營運指南（健康檢查、升級、排除故障） |
 
 ## 授權
 
