@@ -39,6 +39,9 @@ make health
 
 ```bash
 # 1. Update version pins in .env (LABEL_STUDIO_VERSION, POSTGRES_VERSION, etc.)
+#    Note: MinIO uses firstfinger/minio:latest (no version pin) — docker compose pull
+#    will always fetch the latest daily build. To hold a specific build, change
+#    docker-compose.yml minio.image to "firstfinger/minio:<tag>".
 # 2. Pull new images
 docker compose pull
 

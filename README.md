@@ -13,14 +13,14 @@
 | `label-studio` | `heartexlabs/label-studio:latest` | Labeling UI + API |
 | `pg-db` | `postgres:17` | Metadata store |
 | `redis` | `redis:8.6.2` | Task queue / cache |
-| `minio` | `minio/minio:RELEASE.2025-04-22T22-12-26Z` ⚠️ | S3-compatible object storage |
-| `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | One-shot bucket + CORS setup |
+| `minio` | `firstfinger/minio:latest` | S3-compatible object storage + full Admin UI (port 9002) |
+| `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | One-shot bucket init + service account + quota |
 | `nginx` | `nginx:1.28.3-alpine3.23` | Reverse proxy |
 | `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust tunnel |
 | `sam3-image-backend` | (custom build) | SAM3 image segmentation → BrushLabels *(GPU, optional)* |
 | `sam3-video-backend` | (custom build) | SAM3 video object tracking → VideoRectangle *(GPU, optional)* |
 
-> ⚠️ `minio/minio` repository archived 2026-02-13. `RELEASE.2025-04-22T22-12-26Z` patches a privilege escalation CVE; no further updates expected. Evaluate migration to Cloudflare R2 / AWS S3 for long-term use.
+> **MinIO CE note**: MinIO removed all Admin UI from Community Edition on 2025-05-24 and stopped pushing CE images to Docker Hub after 2025-09-07. This stack uses `firstfinger/minio` — a daily build from upstream source that restores the full Admin Console (ports 9001 Console, 9002 Full Admin UI). Ref: [Harsh-2002/MinIO](https://github.com/Harsh-2002/MinIO)
 
 ## Prerequisites
 
@@ -57,7 +57,7 @@ make ml-up
 
 Connect MinIO storage in Label Studio:
 **Project → Settings → Cloud Storage → Add Source Storage → S3**
-(endpoint: `http://minio:9000`, use `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`).
+(endpoint: `http://minio:9000`, use `MINIO_LS_ACCESS_ID` / `MINIO_LS_SECRET_KEY` — the least-privilege service account created by `make init-minio`. Do **not** use root credentials here).
 
 ## Makefile Reference
 

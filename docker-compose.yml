@@ -7,6 +7,10 @@ name: label-anything-sam
 #   label-studio.example.com → nginx:80 → label-studio:8080
 #   minio-api.example.com        → minio:9000 (GET/HEAD WAF rule on CF)
 #   minio-console.example.com        → minio:9001 (GET/HEAD WAF rule on CF)
+# MinIO Admin UI (Full):
+#   http://localhost:19002       → minio:9002 (host-only; not via CF Tunnel)
+#   Using firstfinger/minio — restores Admin Console removed from MinIO CE
+#   after 2025-05-24. See: https://github.com/Harsh-2002/MinIO
 # ============================================================
 
 x-logging: &default-logging
@@ -59,21 +63,37 @@ services:
 
   # ── MinIO ───────────────────────────────────────────────────
   minio:
-    image: "minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}"
+    # firstfinger/minio: daily build from MinIO upstream source with full Admin Console restored.
+    # Exposes: 9000 (S3 API), 9001 (MinIO Console), 9002 (Full Admin UI).
+    # Background: MinIO CE removed all Admin UI on 2025-05-24; last CE image with Admin UI was
+    # RELEASE.2025-04-22T22-12-26Z. minio/minio Docker Hub stopped after RELEASE.2025-09-07T16-13-09Z.
+    # Ref: https://github.com/Harsh-2002/MinIO  https://hub.docker.com/r/firstfinger/minio
+    image: "firstfinger/minio:${MINIO_VERSION:-latest-amd64}"
+    # image: "minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}"  # last CE image with Admin UI
     restart: unless-stopped
     logging: *default-logging
-    command: server /data --console-address ":9001"
+    # firstfinger/minio: ENTRYPOINT=[] CMD=[/usr/bin/start.sh]
+    # start.sh bootstraps minio server + Admin UI (port 9002) — do NOT override entrypoint/command.
+    # Console address is passed via env var instead of --console-address CLI flag.
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-      # External domain — presigned URLs will use this base
+      # MinIO Console listens on :9001 (replaces --console-address CLI flag)
+      - MINIO_CONSOLE_ADDRESS=:9001
+      # External domain — presigned URLs will use this base (S3 API)
       - MINIO_SERVER_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}
-      # MINIO_BROWSER_REDIRECT_URL removed: setting this disables the embedded console,
-      # causing MinIO to serve a redirect stub that fails to load its own JS (all paths
-      # return text/html + nosniff → React never initialises → blank page).
+      # Console external URL — must differ from MINIO_SERVER_URL.
+      # Required for login to work behind a reverse proxy / Cloudflare Tunnel:
+      # MinIO CSRF validation compares Origin against this value.
+      - MINIO_BROWSER_REDIRECT_URL=https://${MINIO_CONSOLE_HOST:-minio-console.example.com}
       # CORS — allow browser uploads via presigned URLs.
       # S3 PutBucketCors API was removed from MinIO open source; use server-level config.
       - MINIO_API_CORS_ALLOW_ORIGIN=*
+      # KMS master key for SSE-S3 bucket encryption (no external KES required).
+      # Format: <key-name>:<base64-encoded-32-byte-key>
+      # Generate: printf 'minio-sse-key:'; openssl rand -base64 32
+      # Leave empty to disable SSE-S3.
+      - MINIO_KMS_SECRET_KEY=${MINIO_KMS_SECRET_KEY:-}
     volumes:
       - ./minio-data:/data
     healthcheck:
@@ -96,6 +116,12 @@ services:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       - MINIO_BUCKET=${MINIO_BUCKET:-label-studio-bucket}
+      # Service account credentials — used to create a least-privilege access key for Label Studio.
+      # Set in .env; leave empty to skip service account provisioning (root credentials will be used).
+      - MINIO_LS_ACCESS_ID=${MINIO_LS_ACCESS_ID:-}
+      - MINIO_LS_SECRET_KEY=${MINIO_LS_SECRET_KEY:-}
+      # Optional bucket quota in GiB. Leave empty to disable.
+      - MINIO_BUCKET_QUOTA_GB=${MINIO_BUCKET_QUOTA_GB:-}
     volumes:
       - ./scripts:/scripts:ro
     entrypoint: ["/bin/sh", "/scripts/init-minio.sh"]

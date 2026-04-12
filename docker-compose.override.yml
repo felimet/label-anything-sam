@@ -19,6 +19,7 @@ services:
     ports:
       - "19000:9000"   # API (S3 endpoint)
       - "19001:9001"   # MinIO Console UI
+      - "19002:9002"   # Full Admin UI (firstfinger/minio only; not via Cloudflare Tunnel)
 
   pg-db:
     ports:

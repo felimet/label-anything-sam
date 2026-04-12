@@ -13,14 +13,14 @@
 | `label-studio` | `heartexlabs/label-studio:latest` | 標注 UI + API |
 | `pg-db` | `postgres:17` | 資料庫 |
 | `redis` | `redis:8.6.2` | 任務佇列 / 快取 |
-| `minio` | `minio/minio:RELEASE.2025-04-22T22-12-26Z` ⚠️ | S3 相容物件儲存 |
-| `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | 一次性 bucket + CORS 初始化 |
+| `minio` | `firstfinger/minio:latest` | S3 相容物件儲存 + 完整 Admin UI（port 9002） |
+| `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | 一次性 bucket 初始化 + service account + quota |
 | `nginx` | `nginx:1.28.3-alpine3.23` | 反向代理 |
 | `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust Tunnel |
 | `sam3-image-backend` | (自訂建置) | SAM3 影像分割 → BrushLabels *(需 GPU，可選)* |
 | `sam3-video-backend` | (自訂建置) | SAM3 影片物件追蹤 → VideoRectangle *(需 GPU，可選)* |
 
-> ⚠️ `minio/minio` 儲存庫已於 2026-02-13 封存，不再更新。`RELEASE.2025-04-22T22-12-26Z` 修補一個權限提升 CVE；長期使用建議評估遷移至 Cloudflare R2 或 AWS S3。
+> **MinIO CE 說明**：MinIO 於 2025-05-24 從社群版移除全部 Admin UI，並於 2025-09-07 後停止推送 CE Docker image。本 stack 改用 `firstfinger/minio`——每日從上游原始碼自動建置並恢復完整 Admin Console（port 9001 Console、port 9002 Full Admin UI）。參考：[Harsh-2002/MinIO](https://github.com/Harsh-2002/MinIO)
 
 ## 前置需求
 
@@ -57,7 +57,7 @@ make ml-up
 
 在 Label Studio 中連接 MinIO 儲存：
 **專案 → Settings → Cloud Storage → Add Source Storage → S3**
-（endpoint: `http://minio:9000`，使用 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`）
+（endpoint: `http://minio:9000`，使用 `MINIO_LS_ACCESS_ID` / `MINIO_LS_SECRET_KEY`——由 `make init-minio` 建立的最小權限 service account。**請勿**填入 root 帳密）
 
 ## Makefile 指令
 
