@@ -2,7 +2,7 @@
         ml-up ml-down \
         build-sam3-image build-sam3-video \
         test-sam3-image test-sam3-video \
-        init-minio health create-admin \
+        init-minio health create-admin reset-password \
         push
 
 # ─── Core stack ─────────────────────────────────────────────
@@ -50,6 +50,9 @@ init-minio:
 
 create-admin:
 	@bash scripts/create-admin.sh
+
+reset-password:
+	@bash scripts/reset-password.sh
 
 # ─── Health check ────────────────────────────────────────────
 health:

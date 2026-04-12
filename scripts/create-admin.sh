@@ -16,9 +16,15 @@ if [ -z "$PASSWORD" ]; then
 fi
 
 echo "Creating admin user: ${USERNAME}"
-docker compose exec label-studio label-studio user create \
-    --username "${USERNAME}" \
-    --password "${PASSWORD}" \
-    --is-staff
+docker compose exec label-studio python /label-studio/label_studio/manage.py shell -c "
+from users.models import User
+email = '${USERNAME}'
+password = '${PASSWORD}'
+if User.objects.filter(email=email).exists():
+    print(f'User {email} already exists — skipping creation')
+else:
+    u = User.objects.create_superuser(email=email, password=password)
+    print(f'Admin user {email} created (id={u.id})')
+"
 
 echo "Done. Log in at: ${LABEL_STUDIO_HOST:-http://localhost:8080}"
