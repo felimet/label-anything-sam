@@ -8,17 +8,17 @@
 
 ## Stack
 
-| Service | Image | Role |
-|---------|-------|------|
-| `label-studio` | `heartexlabs/label-studio:latest` | Labeling UI + API |
-| `pg-db` | `postgres:17` | Metadata store |
-| `redis` | `redis:8.6.2` | Task queue / cache |
-| `minio` | `firstfinger/minio:latest` | S3-compatible object storage + full Admin UI (port 9002) |
-| `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | One-shot bucket init + service account + quota |
-| `nginx` | `nginx:1.28.3-alpine3.23` | Reverse proxy |
-| `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust tunnel |
-| `sam3-image-backend` | (custom build) | SAM3 image segmentation → BrushLabels *(GPU, optional)* |
-| `sam3-video-backend` | (custom build) | SAM3 video object tracking → VideoRectangle *(GPU, optional)* |
+| Service | Image | Role | Data Explain Link |
+|---------|-------|------|------|
+| `label-studio` | `heartexlabs/label-studio:latest` | Labeling UI + API | [`./ls-data/`](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) — exports, local files |
+| `pg-db` | `postgres:17` | Metadata store | [`./postgres-data/`](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) — tasks, annotations, users |
+| `redis` | `redis:8.6.2` | Task queue / cache | [`./redis-data/`](docs/configuration.md#資料目錄說明) — transient queue state |
+| `minio` | `firstfinger/minio:latest` | S3-compatible object storage + full Admin UI (port 9002) | [`./minio-data/`](docs/configuration.md#minio) — media files |
+| `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | One-shot bucket init + service account + quota | — |
+| `nginx` | `nginx:1.28.3-alpine3.23` | Reverse proxy | — |
+| `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust tunnel | — |
+| `sam3-image-backend` | (custom build) | SAM3 image segmentation → BrushLabels *(GPU, optional)* | `hf-cache` (shared volume) — model weights |
+| `sam3-video-backend` | (custom build) | SAM3 video object tracking → VideoRectangle *(GPU, optional)* | `hf-cache` (shared volume) — model weights |
 
 > **MinIO CE note**: MinIO removed all Admin UI from Community Edition on 2025-05-24 and stopped pushing CE images to Docker Hub after 2025-09-07. This stack uses `firstfinger/minio` — a daily build from upstream source that restores the full Admin Console (ports 9001 Console, 9002 Full Admin UI). Ref: [Harsh-2002/MinIO](https://github.com/Harsh-2002/MinIO)
 
@@ -76,7 +76,7 @@ Connect MinIO storage in Label Studio:
 
 | Guide | Contents |
 |-------|----------|
-| [docs/configuration.md](docs/configuration.md) | `.env` variable reference |
+| [docs/configuration.md](docs/configuration.md) | `.env` variable reference · [MinIO Access Policy](docs/configuration.md#minio-bucket-access-policy) · [Bucket Encryption](docs/configuration.md#bucket-encryptionsse-s3--sse-kms) · [pg-db vs ls-data](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) |
 | [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust setup + WAF rules + alternatives |
 | [docs/sam3-backend.md](docs/sam3-backend.md) | SAM3 model setup + annotation workflow |
 | [docs/architecture.md](docs/architecture.md) | Service topology, volumes, networking |

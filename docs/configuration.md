@@ -61,6 +61,40 @@ make init-minio
 5. 複製 **Access Key**（對應 LS 的 *Access Key ID*）與 **Secret Key**
 6. 在 LS Cloud Storage 設定頁填入這兩個值
 
+### MinIO Bucket Access Policy
+
+在 MinIO Admin UI 或 Console 的 Buckets 頁面，每個 bucket 可設定 **Access Policy**：
+
+| Policy | 說明 | 適用情境 |
+|--------|------|----------|
+| `private` | 所有操作皆須驗證（預設） | **Label Studio 標準配置** — LS 透過 Presigned URL 存取，不需公開讀 |
+| `public` | 任何人皆可未經驗證讀取（HTTP GET） | 靜態資源公開分享；**⚠️ 不建議用於標注資料** |
+| `custom` | 自訂 IAM JSON policy | 需要細粒度控制時（例如：指定 IP 範圍、特定 prefix 公開） |
+
+**為何選 `private`**：Label Studio 以 Presigned URL 方式存取 MinIO 物件，URL 本身已內嵌時效性簽名；bucket 不需設為 public。`make init-minio` 建立的 `MINIO_LS_ACCESS_ID` service account 僅有 `MINIO_BUCKET` 的 Get/Put/Delete/List 權限，root 帳密不暴露於 LS。
+
+**Access Policy 與 Bucket Encryption 無關**：Policy 控制「誰可以存取」，Encryption 控制「資料如何靜態加密」，兩者獨立設定。
+
+### Bucket Encryption（SSE-S3 / SSE-KMS）
+
+在 Admin UI → Buckets → 選擇 bucket → **Encryption** 頁籤可設定：
+
+| 加密類型 | 說明 |
+|----------|------|
+| **Default（無加密）** | 不啟用靜態加密；資料以明文儲存於 `./minio-data/`（仍受 Linux 檔案系統權限保護）。適合本機/實驗環境 |
+| **SSE-S3（MinIO managed）** | MinIO 用自身管理的 master key 在寫入時加密每個物件。需在 `.env` 設定 `MINIO_KMS_SECRET_KEY`（格式：`<key-name>:<base64-32-byte-key>`）。適合不需外部 KMS 的場景 |
+| **SSE-KMS（外部 KMS）** | 透過外部 KMS（如 HashiCorp Vault）管理 master key；適合企業合規要求。本 stack 未內建 KES，需另行部署 |
+
+**SSE-S3 注意事項**：
+
+```bash
+# 產生 MINIO_KMS_SECRET_KEY
+printf 'minio-sse-key:'; openssl rand -base64 32
+```
+
+- 啟用後**已存在的未加密物件**會觸發 `PrefixAccessDenied`（MinIO 嘗試以 KMS 解密既有明文物件）。建議在空 bucket 或全新部署時才啟用 SSE-S3。
+- 若已有資料需加密，先備份，再以加密設定重建 stack，最後重新上傳資料。
+
 ## Label Studio
 
 | 變數 | 範例 | 說明 |
@@ -219,6 +253,49 @@ openssl rand -base64 24
 <!-- END AUTO-GENERATED -->
 
 > `postgres-data/` 是 PostgreSQL 的二進位內部格式，**直接複製無法還原**。備份請用 `pg_dump`（見 [Runbook → Backup](RUNBOOK.md#backup)）。
+
+## `pg-db` vs `ls-data` — 資料分層說明
+
+兩者存放的是完全不同層次的資料：
+
+### `pg-db`（PostgreSQL，`./postgres-data/`）
+
+存放 Label Studio 的**應用程式元資料**，純關聯式結構：
+
+- 專案定義（Project）、標注模板（Labeling Config XML）
+- 任務清單（Task）：每筆任務的 URL/路徑指標，**不含媒體檔案本體**
+- 標注結果（Annotation）：標注者畫的框、分割 mask、標籤 JSON
+- 使用者帳號、組織、權限
+- ML backend 設定、預測結果（Prediction）
+- 匯入/匯出歷史記錄
+
+本質上是「誰、在哪個任務、標了什麼」的索引與結果。
+
+### `ls-data`（Label Studio 應用層，`./ls-data/`）
+
+存放 Label Studio **應用程式自身產生的檔案**：
+
+- 匯出的標注檔（JSON/CSV/COCO/YOLO 等）
+- Local files storage 的媒體檔案（放在 `./ls-data/file/`）
+- LS 內部 cache、session 檔
+
+### 對比
+
+| | `pg-db` | `ls-data` |
+|--|---------|-----------|
+| 格式 | PostgreSQL 二進位（不可直接複製） | 普通檔案系統 |
+| 內容 | 元資料、標注 JSON | 媒體檔、匯出檔 |
+| 備份方式 | **必須** `pg_dump` | 直接 `tar` |
+| 如果丟失 | 所有標注結果、任務清單消失 | 媒體檔與匯出結果消失，但標注 JSON 仍在 pg-db |
+
+### 媒體檔案在哪裡？
+
+取決於使用哪種 storage：
+
+- **MinIO**：媒體本體在 `./minio-data/`，pg-db 只存 S3 URL 指標
+- **Local Files**：媒體本體在 `./ls-data/file/`，pg-db 存容器內路徑
+
+三個目錄缺一不可：pg-db 是索引，minio-data 與 ls-data/file 是實體，遺失任何一個都會導致標注工作流斷裂。
 
 ## 兩種媒體存放方式：MinIO vs Local Files
 
