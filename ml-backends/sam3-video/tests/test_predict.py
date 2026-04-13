@@ -240,6 +240,39 @@ class TestMaskToBboxPct(unittest.TestCase):
         assert bbox["height"] == pytest.approx(10.0)
 
 
+# ── Tests: _sanitize_xywh_norm ────────────────────────────────────────────────
+
+class TestSanitizeXywhNorm(unittest.TestCase):
+
+    def test_out_of_range_is_clamped_into_unit_interval(self):
+        from model import NewModel
+        box = NewModel._sanitize_xywh_norm(-0.2, 0.95, 0.6, 0.4)
+        assert box is not None
+        x, y, w, h = box
+        assert 0.0 <= x <= 1.0
+        assert 0.0 <= y <= 1.0
+        assert 0.0 < w <= 1.0
+        assert 0.0 < h <= 1.0
+        assert x + w <= 1.0 + 1e-9
+        assert y + h <= 1.0 + 1e-9
+
+    def test_degenerate_in_frame_box_gets_minimum_size(self):
+        from model import NewModel
+        box = NewModel._sanitize_xywh_norm(0.5, 0.5, 0.0, 0.0)
+        assert box is not None
+        _, _, w, h = box
+        assert w > 0.0
+        assert h > 0.0
+
+    def test_fully_out_of_frame_returns_none(self):
+        from model import NewModel
+        assert NewModel._sanitize_xywh_norm(1.2, 0.2, 0.1, 0.1) is None
+
+    def test_non_finite_input_returns_none(self):
+        from model import NewModel
+        assert NewModel._sanitize_xywh_norm(float("nan"), 0.1, 0.2, 0.2) is None
+
+
 # ── Tests: full predict pipeline (SAM3 path) ───────────────────────────────────
 
 class TestSAM3PredictMocked(unittest.TestCase):
@@ -302,6 +335,73 @@ class TestSAM3PredictMocked(unittest.TestCase):
                      if c.args[0].get("type") == "add_prompt"]
         assert any(c.args[0].get("text") == "the person walking"
                    for c in add_calls)
+
+    def test_add_prompt_boxes_are_normalized_after_clamp(self):
+        self._run(_vr_ctx(x=-25.0, y=95.0, w=180.0, h=35.0))
+        add_calls = [c.args[0] for c in self.mock_pred.handle_request.call_args_list
+                     if c.args[0].get("type") == "add_prompt"]
+        assert add_calls
+        has_box_payload = False
+        for req in add_calls:
+            for box in req.get("bounding_boxes", []):
+                has_box_payload = True
+                assert len(box) == 4
+                assert all(0.0 <= float(v) <= 1.0 for v in box)
+                assert float(box[2]) > 0.0
+                assert float(box[3]) > 0.0
+                assert float(box[0]) + float(box[2]) <= 1.0 + 1e-9
+                assert float(box[1]) + float(box[3]) <= 1.0 + 1e-9
+        assert has_box_payload
+
+    def test_mixed_prompt_keeps_box_label_alignment(self):
+        ctx = _vr_ctx(x=10.0, y=10.0, w=20.0, h=20.0, obj_id="obj-a")
+        ctx["result"].append({
+            "type": "keypointlabels",
+            "id": "kp-1",
+            "value": {
+                "frame": 1,
+                "x": 15.0,
+                "y": 15.0,
+                "keypointlabels": ["background"],
+            },
+            "is_positive": 0,
+        })
+
+        self._run(ctx)
+        add_calls = [c.args[0] for c in self.mock_pred.handle_request.call_args_list
+                     if c.args[0].get("type") == "add_prompt"]
+        reqs_with_boxes = [req for req in add_calls if req.get("bounding_boxes")]
+        assert reqs_with_boxes
+
+        labels = reqs_with_boxes[0].get("bounding_box_labels") or []
+        boxes = reqs_with_boxes[0].get("bounding_boxes") or []
+        assert len(labels) == len(boxes)
+        assert 1 in labels
+        assert 0 in labels
+
+    def test_far_out_of_frame_keypoint_is_dropped(self):
+        ctx = _vr_ctx(x=10.0, y=10.0, w=20.0, h=20.0, obj_id="obj-a")
+        ctx["result"].append({
+            "type": "keypointlabels",
+            "id": "kp-far",
+            "value": {
+                "frame": 1,
+                "x": 500.0,
+                "y": 500.0,
+                "keypointlabels": ["background"],
+            },
+            "is_positive": 0,
+        })
+
+        self._run(ctx)
+        add_calls = [c.args[0] for c in self.mock_pred.handle_request.call_args_list
+                     if c.args[0].get("type") == "add_prompt"]
+        reqs_with_boxes = [req for req in add_calls if req.get("bounding_boxes")]
+        assert reqs_with_boxes
+
+        labels_flat = [lbl for req in reqs_with_boxes for lbl in req.get("bounding_box_labels", [])]
+        assert 1 in labels_flat
+        assert 0 not in labels_flat
 
     def test_result_type_is_videorectangle(self):
         result = self._run(_vr_ctx())

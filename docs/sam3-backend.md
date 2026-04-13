@@ -155,12 +155,14 @@ NewModel.predict()
     ├── _get_text_prompt()                    ← TextArea → str（可選）
     ├── _predict_sam3()
     │    ├── torch.autocast(bfloat16) context 包裹
-    │    ├── cv2.VideoCapture → 取得 vid_w/vid_h（百分比 → 像素換算）
+    │    ├── 幾何提示正規化                    ← 百分比轉 normalized xywh，並做 sanitize/clamp 到 [0,1]
+    │    │                                      非有限值（NaN/Inf）或完全離框提示會被略過
+    │    │                                      KeyPoint 轉 2%×2% tiny box（SAM3 視訊路徑僅吃 boxes）
     │    ├── handle_request({ type: "start_session", resource_path: video_path })
     │    ├── handle_request({ type: "add_prompt",              ← 依畫格分組，每 obj_id 一次
     │    │        frame_index, obj_id,
-    │    │        bounding_boxes (pixel xywh),                ← box 提示
-    │    │        points / point_labels,                      ← point 提示
+    │    │        bounding_boxes (normalized xywh),           ← box 與 point(轉 tiny box) 提示
+    │    │        bounding_box_labels,                        ← 1: 正向, 0: 負向
     │    │        text? })                                    ← 文字提示（SAM3 only）
     │    ├── handle_stream_request({ type: "propagate_in_video",
     │    │        start_frame_index: last_frame,
@@ -283,6 +285,11 @@ DEVICE=cpu python -m pytest tests/ --tb=short -v
 **影像後端測試涵蓋**：`Sam3Processor` mock、純文字 / 純幾何 / 混合三條路徑、SAM2 fallback（文字忽略）、box 正規化（normalized cxcywh）、`set_image` 呼叫、RLE roundtrip。
 
 **影片後端測試涵蓋**：`_get_geo_prompts` / `_get_text_prompt` 解析、`handle_request` / `handle_stream_request` mock、session 生命週期（`close_session` 必定呼叫）、`_mask_to_bbox_pct`、SAM2 fallback propagation。
+
+另含 prompt 正規化回歸測試：
+- `xywh` sanitize（越界 clamp、退化框最小尺寸、非有限值/完全離框丟棄）
+- `add_prompt` 的 `bounding_boxes`/`bounding_box_labels` 對齊（含 mixed 正負提示）
+- 極端離框 keypoint 不會被靜默轉成邊界負樣本
 
 ## 環境變數
 

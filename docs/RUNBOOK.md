@@ -207,6 +207,37 @@ docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-co
 # 應該沒有輸出；若有 --preload 須移除
 ```
 
+### SAM3 video backend — `boxes_xywh` AssertionError
+
+若日誌出現：
+
+```
+AssertionError
+... sam3_multiplex_tracking.py ...
+assert (boxes_xywh >= 0).all().item() and (boxes_xywh <= 1).all().item()
+```
+
+代表送入 `add_prompt` 的 `bounding_boxes` 不是合法 normalized `xywh`（例如小於 0、大於 1、NaN/Inf）。
+
+目前後端已實作 sanitize：
+- 越界值 clamp 到 `[0,1]`
+- 退化框補最小正尺寸
+- 非有限值與完全離框提示直接略過
+
+若仍可重現：
+1. 確認服務已重啟載入最新 `model.py`
+2. 檢查 task/context payload 是否有異常百分比（例如 `x=-300`、`width=999`）
+3. 若為自訂前端或匯入資料，先在來源端做百分比範圍驗證
+
+```bash
+# 重新載入最新程式碼
+make restart-sam3-video
+
+# 觀察 add_prompt / AssertionError 相關日誌
+docker compose -f docker-compose.yml -f docker-compose.ml.yml \
+  logs -f sam3-video-backend | grep -Ei "add_prompt|boxes_xywh|AssertionError"
+```
+
 ### SAM3 後端 — Pascal / Volta GPU（sm_61 / sm_70）
 
 **行為**：啟動時記錄 `WARNING`，不再 raise RuntimeError。後端繼續嘗試載入模型。

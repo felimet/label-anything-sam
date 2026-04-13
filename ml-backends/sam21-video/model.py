@@ -34,11 +34,13 @@ from __future__ import annotations
 import base64
 import gc as _gc
 import hashlib
+import json
 import logging
 import os
 import tempfile
 import threading
 import time as _time_module
+import uuid as _uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -62,6 +64,11 @@ DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu"
 GPU_IDLE_TIMEOUT = int(os.getenv("GPU_IDLE_TIMEOUT_SECS", "3600"))
 MAX_FRAMES_TO_TRACK = int(os.getenv("MAX_FRAMES_TO_TRACK", "10"))
 MAX_FRAME_LONG_SIDE = int(os.getenv("MAX_FRAME_LONG_SIDE", "1024"))
+_require_run_trigger_raw = os.getenv("REQUIRE_RUN_TRIGGER")
+if _require_run_trigger_raw is None or not _require_run_trigger_raw.strip():
+    REQUIRE_RUN_TRIGGER = True
+else:
+    REQUIRE_RUN_TRIGGER = _require_run_trigger_raw.strip().lower() in {"1", "true", "yes", "on"}
 
 # ── Model config from environment ───────────────────────────────────────────────
 # MODEL_CONFIG and MODEL_CHECKPOINT are the only supported way to specify a model.
@@ -267,6 +274,93 @@ class NewModel(LabelStudioMLBase):
 
         return "Object"
 
+    def _build_info_prediction(self, to_name: str, message: str) -> ModelResponse:
+        """Return a non-empty prediction payload to avoid Label Studio empty-results errors."""
+        result_items = [{
+            "id": str(_uuid.uuid4())[:8],
+            "from_name": "scores",
+            "to_name": to_name,
+            "type": "textarea",
+            "value": {"text": [message]},
+        }]
+        return ModelResponse(predictions=[PredictionValue(result=result_items)])
+
+    def _guess_to_name(self) -> str:
+        """Best-effort fallback target when tag lookup fails."""
+        for cfg in self.parsed_label_config.values():
+            to_names = cfg.get("to_name") or []
+            if to_names:
+                return str(to_names[0])
+        return "video"
+
+    @staticmethod
+    def _normalize_result_items(value) -> list[dict]:
+        """Normalize Label Studio result payload into a list of dict items."""
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            if "result" in value:
+                return NewModel._normalize_result_items(value.get("result"))
+            return [value]
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except Exception:
+                return []
+            return NewModel._normalize_result_items(decoded)
+        return []
+
+    @staticmethod
+    def _fetch_task_payload_from_ls(task_id, project_id: Optional[int] = None) -> dict:
+        """Fetch task payload from Label Studio API for fallback prompt recovery."""
+        if not task_id:
+            return {}
+
+        try:
+            task_id_int = int(task_id)
+            if task_id_int <= 0:
+                return {}
+        except (TypeError, ValueError):
+            logger.warning("Invalid task_id for fallback fetch: %r", task_id)
+            return {}
+
+        ls_base = os.getenv("LABEL_STUDIO_URL", "http://label-studio:8080").rstrip("/")
+        api_key = os.getenv("LABEL_STUDIO_API_KEY", "")
+        headers = {"Authorization": f"Token {api_key}"} if api_key else {}
+        params: dict[str, str] = {}
+        if project_id is not None:
+            params["project"] = str(project_id)
+
+        try:
+            resp = requests.get(
+                f"{ls_base}/api/tasks/{task_id_int}",
+                headers=headers,
+                params=params,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            if isinstance(payload, dict):
+                return payload
+        except Exception as exc:
+            logger.warning("Task fallback fetch failed task=%s project=%s error=%s", task_id, project_id, exc)
+        return {}
+
+    @staticmethod
+    def _get_latest_prompt_results(task_payload: Dict) -> list[dict]:
+        """Return prompt results from latest draft, or latest annotation as fallback."""
+        drafts = task_payload.get("drafts") or []
+        if drafts:
+            return NewModel._normalize_result_items(drafts[-1].get("result"))
+
+        annotations = task_payload.get("annotations") or []
+        if annotations:
+            return NewModel._normalize_result_items(annotations[-1].get("result"))
+
+        return []
+
     # ── Model selection ───────────────────────────────────────────────────────
     # _resolve_model_key is a module-level function (see above class).
     # ── predict() ────────────────────────────────────────────────────────────
@@ -280,24 +374,68 @@ class NewModel(LabelStudioMLBase):
         NewModel._last_activity = _time_module.monotonic()
 
         if not tasks:
-            return ModelResponse(predictions=[])
+            logger.info("Empty tasks payload in predict()")
+            return self._build_info_prediction(self._guess_to_name(), "Empty tasks payload.")
 
         try:
             from_name, to_name, value = self.get_first_tag_occurence("VideoRectangle", "Video")
         except Exception as exc:
             logger.error("get_first_tag_occurence failed: %s", exc)
-            return ModelResponse(predictions=[])
+            return self._build_info_prediction(
+                self._guess_to_name(),
+                f"Label config parse failed: {exc}",
+            )
 
         task = tasks[0]
         task_id = task.get("id")
+        project_id = task.get("project")
+        remote_task_payload: Optional[Dict] = None
+
+        def _get_remote_task_payload() -> Dict:
+            nonlocal remote_task_payload
+            if remote_task_payload is None:
+                remote_task_payload = self._fetch_task_payload_from_ls(task_id, project_id)
+            return remote_task_payload or {}
+
+        raw_context_items = self._normalize_result_items((context or {}).get("result"))
+        has_run_trigger = any(
+            isinstance(item, dict)
+            and item.get("from_name") == "run_trigger"
+            and item.get("type") == "textarea"
+            for item in raw_context_items
+        )
+        has_geo_context = any(
+            isinstance(item, dict) and item.get("type") == "videorectangle"
+            for item in raw_context_items
+        )
+
+        # Ignore auto smart-trigger calls from box edits unless manual submit fired.
+        if REQUIRE_RUN_TRIGGER and has_geo_context and not has_run_trigger:
+            logger.info(
+                "Skip auto trigger task=%s context_items=%d (waiting run_trigger submit)",
+                task_id,
+                len(raw_context_items),
+            )
+            return self._build_info_prediction(
+                to_name,
+                "Box updated. Click Submit in Run Tracking to execute SAM2.1.",
+            )
 
         # Interactive mode: context must contain drawn VideoRectangle result.
         # Triggered by the "Submit" button on the run_trigger TextArea in the
         # labeling config (same pattern as sam3-video).  VideoRectangle smart="true"
         # may also trigger directly in newer Label Studio versions.
-        if not context or not context.get("result"):
-            return ModelResponse(predictions=[])
-        annotation_result = context["result"]
+        annotation_result = raw_context_items
+        context_types = [str(item.get("type")) for item in annotation_result if isinstance(item, dict)]
+        if not annotation_result:
+            annotation_result = self._get_latest_prompt_results(task)
+        if not annotation_result:
+            annotation_result = self._get_latest_prompt_results(_get_remote_task_payload())
+        if not annotation_result:
+            return self._build_info_prediction(
+                to_name,
+                "No prompt found. Draw a VideoRectangle (Object/Exclude) then click Submit.",
+            )
 
         # VideoRectangle metadata (fps, frames_count)
         vr_results = [r for r in annotation_result if r.get("type") == "videorectangle"]
@@ -318,9 +456,46 @@ class NewModel(LabelStudioMLBase):
         # Parse prompts
         default_track_label = self._resolve_default_track_label(from_name)
         geo_prompts = self._get_geo_prompts({"result": annotation_result}, default_track_label)
+        fallback_result: list[dict] = []
+        if not geo_prompts:
+            # Interactive context often only carries run_trigger textarea; recover
+            # geometry prompts from task drafts/annotations as a fallback source.
+            fallback_result = self._get_latest_prompt_results(task)
+            if not fallback_result:
+                fallback_result = self._get_latest_prompt_results(_get_remote_task_payload())
+            if fallback_result:
+                geo_prompts = self._get_geo_prompts({"result": fallback_result}, default_track_label)
+                if geo_prompts:
+                    annotation_result = fallback_result
+
+        fallback_payload = remote_task_payload if remote_task_payload else task
+        fallback_drafts = len(fallback_payload.get("drafts", [])) if isinstance(fallback_payload, dict) else 0
+        fallback_annotations = len(fallback_payload.get("annotations", [])) if isinstance(fallback_payload, dict) else 0
+
+        fallback_types = [str(item.get("type")) for item in fallback_result if isinstance(item, dict)]
+        logger.info(
+            "Prompt parse task=%s context_items=%d fallback_items=%d geo_prompts=%d context_types=%s fallback_types=%s",
+            task_id,
+            len(annotation_result),
+            len(fallback_result),
+            len(geo_prompts),
+            context_types,
+            fallback_types,
+        )
         if not geo_prompts:
             logger.debug("Task %s: no geometric prompts found in annotation result", task_id)
-            return ModelResponse(predictions=[])
+            logger.warning(
+                "No geometric prompt task=%s context_types=%s drafts=%d annotations=%d fallback_types=%s",
+                task_id,
+                context_types,
+                fallback_drafts,
+                fallback_annotations,
+                fallback_types,
+            )
+            return self._build_info_prediction(
+                to_name,
+                "No geometric prompt found. Ensure at least one enabled VideoRectangle exists.",
+            )
 
         # Resolve model and load
         model_key = _resolve_model_key()
@@ -341,7 +516,7 @@ class NewModel(LabelStudioMLBase):
                 video_path = self.get_local_path(video_url, task_id=task_id)
         except Exception as exc:
             logger.error("Failed to resolve video path: %s", exc)
-            return ModelResponse(predictions=[])
+            return self._build_info_prediction(to_name, f"Video resolve failed: {exc}")
 
         # Ensure video file has an extension (Label Studio cache may strip it)
         if not os.path.splitext(video_path)[1]:
@@ -374,7 +549,7 @@ class NewModel(LabelStudioMLBase):
             )
         except Exception as exc:
             logger.error("Video predict failed: %s", exc, exc_info=True)
-            return ModelResponse(predictions=[])
+            return self._build_info_prediction(to_name, f"Video predict failed: {exc}")
 
         # Merge: keep prior context frames not covered by new predictions (predictions win)
         context_sequence = vr_results[0]["value"].get("sequence", []) if vr_results else []
@@ -385,7 +560,6 @@ class NewModel(LabelStudioMLBase):
         else:
             full_sequence = sequence
 
-        import uuid as _uuid
         result_items: list[dict] = [{
             "value": {
                 "framesCount": frames_count,
@@ -457,7 +631,7 @@ class NewModel(LabelStudioMLBase):
         frame_end = last_frame + MAX_FRAMES_TO_TRACK + 1
         info_lines: list[str] = []
 
-        # Probe video dimensions for coordinate scaling
+        # Probe original video dimensions (used only for diagnostics)
         cap = cv2.VideoCapture(video_path)
         vid_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         vid_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -473,6 +647,18 @@ class NewModel(LabelStudioMLBase):
                 "Extracted %d frames [%d, %d) → %s",
                 n_extracted, start_frame, frame_end, frame_dir,
             )
+
+            # Prompts must be mapped to the same resolution as extracted frames.
+            # If frames are downscaled, using original video size will shift boxes.
+            prompt_w, prompt_h = vid_w, vid_h
+            first_frame = cv2.imread(os.path.join(frame_dir, "00000.jpg"))
+            if first_frame is not None:
+                prompt_h, prompt_w = first_frame.shape[:2]
+            if prompt_w != vid_w or prompt_h != vid_h:
+                logger.info(
+                    "Prompt coordinate scale uses extracted frame size %dx%d (original %dx%d)",
+                    prompt_w, prompt_h, vid_w, vid_h,
+                )
 
             # SAM2 video predictor expects a directory of JPEG frames
             with torch.inference_mode():
@@ -496,17 +682,30 @@ class NewModel(LabelStudioMLBase):
                         oid = p["obj_id"]
                         if p["type"] == "box":
                             # Convert percentage coords to pixel coords
-                            x0 = p["x_pct"] / 100.0 * vid_w
-                            y0 = p["y_pct"] / 100.0 * vid_h
-                            x1 = x0 + p["w_pct"] / 100.0 * vid_w
-                            y1 = y0 + p["h_pct"] / 100.0 * vid_h
+                            x0 = p["x_pct"] / 100.0 * prompt_w
+                            y0 = p["y_pct"] / 100.0 * prompt_h
+                            x1 = x0 + p["w_pct"] / 100.0 * prompt_w
+                            y1 = y0 + p["h_pct"] / 100.0 * prompt_h
+
+                            # Clamp coordinates to valid frame bounds.
+                            x0 = float(np.clip(x0, 0.0, max(0.0, prompt_w - 1.0)))
+                            y0 = float(np.clip(y0, 0.0, max(0.0, prompt_h - 1.0)))
+                            x1 = float(np.clip(x1, 0.0, max(0.0, prompt_w - 1.0)))
+                            y1 = float(np.clip(y1, 0.0, max(0.0, prompt_h - 1.0)))
+                            if x1 <= x0:
+                                x1 = min(prompt_w - 1.0, x0 + 1.0)
+                            if y1 <= y0:
+                                y1 = min(prompt_h - 1.0, y0 + 1.0)
+
                             if p.get("is_positive", True):
                                 by_obj[oid]["boxes_fg"].append([x0, y0, x1, y1])
                             else:
                                 by_obj[oid]["boxes_bg"].append([x0, y0, x1, y1])
                         elif p["type"] == "point":
-                            cx = p["x_pct"] / 100.0 * vid_w
-                            cy = p["y_pct"] / 100.0 * vid_h
+                            cx = p["x_pct"] / 100.0 * prompt_w
+                            cy = p["y_pct"] / 100.0 * prompt_h
+                            cx = float(np.clip(cx, 0.0, max(0.0, prompt_w - 1.0)))
+                            cy = float(np.clip(cy, 0.0, max(0.0, prompt_h - 1.0)))
                             if p.get("is_positive", True):
                                 by_obj[oid]["pts_fg"].append([cx, cy])
                             else:
@@ -602,14 +801,28 @@ class NewModel(LabelStudioMLBase):
             default_label = "Object"
 
         prompts: list[dict] = []
-        for item in context.get("result", []):
+        for item in self._normalize_result_items(context.get("result")):
             item_type = item.get("type")
 
             if item_type == "videorectangle":
                 obj_id = item["id"]
-                label_name = (item["value"].get("labels") or [default_label])[0]
+                value = item.get("value", {})
+                label_name = (value.get("labels") or [default_label])[0]
                 is_positive = label_name.lower() != "exclude"
-                for seq in item["value"].get("sequence", []):
+
+                # Some interactive payloads carry a single box without sequence.
+                sequence = value.get("sequence") or []
+                if not sequence and all(k in value for k in ("x", "y", "width", "height")):
+                    sequence = [{
+                        "frame": value.get("frame", 1),
+                        "x": value.get("x", 0.0),
+                        "y": value.get("y", 0.0),
+                        "width": value.get("width", 0.0),
+                        "height": value.get("height", 0.0),
+                        "enabled": True,
+                    }]
+
+                for seq in sequence:
                     if not seq.get("enabled", True):
                         continue
                     frame_idx = max(seq.get("frame", 1) - 1, 0)

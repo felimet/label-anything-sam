@@ -92,7 +92,7 @@
     <HyperText name="h_box" value="" className="sam21-label" inline="true">
       <span title="1. 確認工具列 auto（⚡）smart 模式已啟用。&#10;2. 在影片上暫停至目標畫格。&#10;3. 選標籤後拖拉矩形框住目標，放開即觸發追蹤。&#10;&#10;Object  → 正向框（追蹤目標物件）&#10;Exclude → 負向框（告知模型排除此區域）&#10;&#10;注意：僅支援 VideoRectangle 框選提示。">Box Prompt</span>
     </HyperText>
-    <VideoRectangle name="box" toName="video" smart="true"/>
+    <VideoRectangle name="box" toName="video" smart="false"/>
   </View>
 
   <!-- Labels for tracking objects -->

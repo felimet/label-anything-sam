@@ -651,12 +651,25 @@ class NewModel(LabelStudioMLBase):
 
                     for p in frame_prompts:
                         if p["type"] == "box":
-                            x0 = p["x_pct"] / 100.0
-                            y0 = p["y_pct"] / 100.0
-                            bw = p["w_pct"] / 100.0
-                            bh = p["h_pct"] / 100.0
+                            sanitized = self._sanitize_xywh_norm(
+                                p["x_pct"] / 100.0,
+                                p["y_pct"] / 100.0,
+                                p["w_pct"] / 100.0,
+                                p["h_pct"] / 100.0,
+                            )
+                            if sanitized is None:
+                                logger.debug(
+                                    "Skip out-of-range box prompt: obj_id=%s frame=%d raw=(%.4f, %.4f, %.4f, %.4f)",
+                                    p["obj_id"],
+                                    orig_frame_idx,
+                                    p["x_pct"] / 100.0,
+                                    p["y_pct"] / 100.0,
+                                    p["w_pct"] / 100.0,
+                                    p["h_pct"] / 100.0,
+                                )
+                                continue
                             is_pos = p.get("is_positive", True)
-                            by_obj[p["obj_id"]]["box_entries"].append(([x0, y0, bw, bh], is_pos))
+                            by_obj[p["obj_id"]]["box_entries"].append((sanitized, is_pos))
                             if p["obj_id"] not in box_obj_ids:
                                 box_obj_ids.append(p["obj_id"])
                         elif p["type"] == "point":
@@ -664,7 +677,12 @@ class NewModel(LabelStudioMLBase):
                             cx = p["x_pct"] / 100.0
                             cy = p["y_pct"] / 100.0
                             is_pos = bool(p.get("is_positive", True))
-                            tiny = [cx, cy, 0.02, 0.02]
+                            tiny_size = 0.02
+                            tiny_x = cx - tiny_size / 2.0
+                            tiny_y = cy - tiny_size / 2.0
+                            tiny = self._sanitize_xywh_norm(tiny_x, tiny_y, tiny_size, tiny_size)
+                            if tiny is None:
+                                continue
                             # Negative (background) points → attach to all box-defined
                             # objects; if none exist, attach to own obj_id.
                             if is_pos:
@@ -704,14 +722,19 @@ class NewModel(LabelStudioMLBase):
                             req["bounding_box_labels"] = [1 if p else 0 for _, p in entries]
                         add_resp = pred.handle_request(req)
                         if add_resp:
+                            has_positive = any(is_positive for _, is_positive in entries)
+                            has_negative = any((not is_positive) for _, is_positive in entries)
+                            prompt_type = "[Mixed]" if has_positive and has_negative else (
+                                "[Object]" if has_positive else "[Exclude]"
+                            )
                             logger.info(
-                                "add_prompt (frame=%d→rel=%d obj=%d is_pos=%s): %s",
+                                "add_prompt (frame=%d→rel=%d obj=%d type=%s): %s",
                                 orig_frame_idx, rel_frame_idx,
-                                obj_id_map[obj_id], data["is_positive"], add_resp,
+                                obj_id_map[obj_id], prompt_type, add_resp,
                             )
                             score_lines.append(
                                 f"frame={orig_frame_idx} obj={obj_id_map[obj_id]} "
-                                f"{'[Object]' if data['is_positive'] else '[Exclude]'}: {add_resp}"
+                                f"{prompt_type}: {add_resp}"
                             )
 
                 rel_last_frame = last_frame - start_frame
@@ -833,7 +856,6 @@ class NewModel(LabelStudioMLBase):
         return None
 
     @staticmethod
-    @staticmethod
     def _mask_to_bbox_pct(mask: np.ndarray) -> Optional[dict]:
         """Convert binary mask to percentage bounding box. Returns None if empty."""
         mask = mask.squeeze()
@@ -847,6 +869,56 @@ class NewModel(LabelStudioMLBase):
             "width":  round(float(xs.max() - xs.min() + 1) / w * 100, 2),
             "height": round(float(ys.max() - ys.min() + 1) / h * 100, 2),
         }
+
+    @staticmethod
+    def _sanitize_xywh_norm(
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        *,
+        min_size: float = 1e-4,
+    ) -> Optional[list[float]]:
+        """Clamp xywh box to valid normalized coordinates in [0, 1]."""
+        x0 = float(x)
+        y0 = float(y)
+        x1 = float(x + w)
+        y1 = float(y + h)
+
+        if not all(np.isfinite(v) for v in (x0, y0, x1, y1)):
+            return None
+
+        raw_x_lo = min(x0, x1)
+        raw_y_lo = min(y0, y1)
+        raw_x_hi = max(x0, x1)
+        raw_y_hi = max(y0, y1)
+
+        # No intersection with the normalized image plane [0, 1]x[0, 1].
+        if raw_x_hi <= 0.0 or raw_x_lo >= 1.0 or raw_y_hi <= 0.0 or raw_y_lo >= 1.0:
+            return None
+
+        x_lo = float(np.clip(raw_x_lo, 0.0, 1.0))
+        y_lo = float(np.clip(raw_y_lo, 0.0, 1.0))
+        x_hi = float(np.clip(raw_x_hi, 0.0, 1.0))
+        y_hi = float(np.clip(raw_y_hi, 0.0, 1.0))
+
+        if x_hi - x_lo < min_size:
+            if x_lo >= 1.0:
+                x_lo = max(0.0, 1.0 - min_size)
+                x_hi = 1.0
+            else:
+                x_hi = min(1.0, x_lo + min_size)
+        if y_hi - y_lo < min_size:
+            if y_lo >= 1.0:
+                y_lo = max(0.0, 1.0 - min_size)
+                y_hi = 1.0
+            else:
+                y_hi = min(1.0, y_lo + min_size)
+
+        if x_hi <= x_lo or y_hi <= y_lo:
+            return None
+
+        return [x_lo, y_lo, x_hi - x_lo, y_hi - y_lo]
 
     @staticmethod
     def _extract_frames(
