@@ -27,20 +27,36 @@ SAM2.1（Segment Anything Model 2.1）是 Meta 釋出的分割模型，支援靜
 
 ## 模型選擇
 
-模型由 `.env.ml` 的 `SAM21_DEFAULT_MODEL` 決定，重建 image 後生效。每次 `predict()` 呼叫直接使用此值（`_resolve_model_key()` 回傳 `DEFAULT_MODEL`）。
+> **`SAM21_DEFAULT_MODEL` 已移除** — 請改用 `MODEL_CONFIG` + `MODEL_CHECKPOINT`（見下）。
 
-切換模型步驟：修改 `.env.ml` 的 `SAM21_DEFAULT_MODEL` → 執行 `make build-sam21-image build-sam21-video` → `make up-sam21-image up-sam21-video`。
+### 推薦方式：MODEL_CONFIG + MODEL_CHECKPOINT
 
-切換模型時，後端自動 unload 舊模型（`del predictor` + `cuda.empty_cache()`）再載入新模型。
+`.env.ml` 中設定一組變數即可指定任意 SAM2.1 模型，無需修改程式碼：
 
-### 可選模型
+```bash
+# 使用內建 large 模型（預設值）
+MODEL_CONFIG=configs/sam2.1/sam2.1_hiera_l.yaml
+MODEL_CHECKPOINT=sam2.1_hiera_large.pt
+
+# 使用自訂模型（checkpoint 需放在 /data/models 或使用絕對路徑）
+MODEL_CONFIG=/data/models/my_custom.yaml
+MODEL_CHECKPOINT=/data/models/my_custom.pt
+```
+
+- `MODEL_CONFIG` + `MODEL_CHECKPOINT` 兩者皆設定時優先於內建模型字典
+- 變更後重啟服務（`make restart-sam21-image restart-sam21-video`）即可生效，**無需重建 Docker image**
+- 支援絕對路徑或 `$MODEL_DIR` 下的檔名
+
+### 內建模型（已棄用，不建議新使用）
+
+`SAM21_DEFAULT_MODEL` 已完全移除，請僅使用 `MODEL_CONFIG` + `MODEL_CHECKPOINT`。
 
 | 模型 key | checkpoint 檔 | 參數量 | 備註 |
 |----------|--------------|--------|------|
 | `sam2.1_hiera_tiny` | `sam2.1_hiera_tiny.pt` | ~38M | 最快，VRAM 最少 |
 | `sam2.1_hiera_small` | `sam2.1_hiera_small.pt` | ~46M | 快 |
 | `sam2.1_hiera_base_plus` | `sam2.1_hiera_base_plus.pt` | ~80M | 速度與精度平衡 |
-| `sam2.1_hiera_large` | `sam2.1_hiera_large.pt` | ~224M | 最精準（**預設**） |
+| `sam2.1_hiera_large` | `sam2.1_hiera_large.pt` | ~224M | 最精準 |
 
 ## 啟動
 
@@ -115,7 +131,7 @@ Label Studio（點擊事件）
     │  POST /predict  { task, context: {keypointlabels | rectanglelabels} }
     ▼
 NewModel.predict()
-    ├── _resolve_model_key()          ← 讀取 SAM21_DEFAULT_MODEL env var
+    ├── _resolve_model_key()          ← 從 MODEL_CHECKPOINT 推導邏輯模型名稱
     ├── _ensure_model()               ← lazy load / swap model
     ├── _load_image()                 ← 本機路徑直接讀取；s3:// → LS resolve endpoint；http → Token auth GET
     ├── _parse_prompts()              ← context → point_coords, point_labels, box
@@ -144,19 +160,23 @@ Settings → Labeling Interface → Code → 貼上 XML
 
 | 控制項 | 類型 | 用途 |
 |--------|------|------|
-| `<VideoRectangle name="box" smart="true">` | 框選提示 | 在目標畫格拉框，觸發向前追蹤 |
+| `<VideoRectangle name="box" smart="true">` | 框選提示 | 在目標畫格拉框選取物件（不會自動觸發推論，需配合 Submit 按鈕） |
 | `<Labels name="videoLabels">` | 追蹤標籤 | Object（正向）/ Exclude（負向） |
+| `<TextArea name="run_trigger" showSubmitButton="true">` | 推論觸發器 | 框選後點擊 **Submit** 觸發 SAM2.1 追蹤（仿 sam3-video 作法） |
 | `<TextArea name="scores">` | 追蹤資訊 | 由 ML backend 自動填入：模型名稱 + 逐畫格 obj/mask info |
 
+> **VideoRectangle `smart="true"` 不會自動觸發推論**：Label Studio 的即時 smart annotation 僅對影像工具（`RectangleLabels`、`KeyPointLabels`、`BrushLabels`）有效；`VideoRectangle` 畫框後需手動點擊 `run_trigger` TextArea 的 **Submit** 按鈕才會呼叫後端。
+>
 > `KeyPointLabels` 已從影片後端移除：Label Studio 的 `KeyPointLabels` 僅支援 `Image` tag，不支援 `Video`；影片模式的點提示目前無對應 tag。
 
 ### 推論流程（video）
 
 ```
-Label Studio（使用者在畫格 N 畫框）
-    │  POST /predict  { task, context: {videorectangle} }
+Label Studio（使用者在畫格 N 畫框 → 點擊 run_trigger Submit 按鈕）
+    │  POST /predict  { task, context: {videorectangle, run_trigger textarea} }
     ▼
 NewModel.predict()
+    ├── context 無結果 → 立即回傳空（不再有 batch fallback）
     ├── _get_geo_prompts()            ← VideoRectangle → [{type:"box", frame_idx, x_pct…}]
     ├── _resolve_model_key() / _ensure_model()
     ├── 下載影片（S3/MinIO/本機，含 token auth；無副檔名時建立 symlink）
@@ -183,6 +203,8 @@ Label Studio（渲染多畫格追蹤框）
 | 追蹤長度 | 最多 `MAX_FRAMES_TO_TRACK` 畫格（預設 10），從最後一個提示畫格起算 |
 | 解析度縮放 | 長邊超過 `MAX_FRAME_LONG_SIDE`（預設 1024）自動縮小，避免 OOM |
 | 文字提示 | SAM2.1 不支援 PCS，TextArea 配置已移除 text_prompt |
+| VideoRectangle 自動觸發 | `smart="true"` 對影片工具無效；需點擊 `run_trigger` Submit 按鈕（仿 sam3-video 作法） |
+| Batch mode | 已移除 `_get_latest_annotation_result` 批次回退路徑；僅支援互動模式（context 必須含結果） |
 | gunicorn `--preload` | **禁止使用** |
 
 ## GPU 精度

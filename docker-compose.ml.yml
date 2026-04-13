@@ -28,7 +28,7 @@ services:
     env_file:
       - .env.ml
     environment:
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
       # GPU assignment and worker count are derived from SAM3_IMAGE_GPU_INDEX /
@@ -71,7 +71,7 @@ services:
     env_file:
       - .env.ml
     environment:
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
       # GPU assignment and worker count are derived from SAM3_VIDEO_GPU_INDEX /
@@ -114,7 +114,7 @@ services:
     env_file:
       - .env.ml
     environment:
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
     volumes:
@@ -150,7 +150,7 @@ services:
     env_file:
       - .env.ml
     environment:
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
     volumes:

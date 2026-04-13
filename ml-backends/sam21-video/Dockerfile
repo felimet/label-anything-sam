@@ -32,7 +32,8 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/home/appuser/.cache/huggingface \
     TRANSFORMERS_CACHE=/home/appuser/.cache/huggingface \
     MODEL_DIR=/data/models \
-    SAM21_DEFAULT_MODEL=sam2.1_hiera_large \
+    MODEL_CONFIG=configs/sam2.1/sam2.1_hiera_l.yaml \
+    MODEL_CHECKPOINT=sam2.1_hiera_large.pt \
     MAX_FRAMES_TO_TRACK=10 \
     MAX_FRAME_LONG_SIDE=1024
 

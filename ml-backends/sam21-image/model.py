@@ -8,18 +8,11 @@ inside each gunicorn worker process after fork().  This avoids CUDA
 initialisation in the master process ("Cannot re-initialize CUDA in forked
 subprocess").  Do NOT use gunicorn --preload.
 
-Model selection (persistent)
------------------------------
-The labeling_config.xml includes a <Choices name="sam_model"> checkbox.
-On each predict() call, the backend resolves the model key in priority order:
-
-  1. context["result"] — Choices annotation in the current labeling session
-  2. task["annotations"][-1]["result"] — last saved annotation
-  3. /data/models/sam21_last_model.txt — persisted selection across restarts
-  4. SAM21_DEFAULT_MODEL env var (default: sam2.1_hiera_large)
-
-Once a model is selected, it is cached in-process.  The next predict() that
-requests a *different* model triggers an unload + reload cycle.
+Model selection
+--------------
+MODEL_CONFIG and MODEL_CHECKPOINT environment variables specify the model.
+Both must be set at container startup; the backend raises RuntimeError if either
+is missing.  There is no built-in model dictionary.
 
 SAM2 image API (facebookresearch/sam2)
 --------------------------------------
@@ -63,25 +56,39 @@ logger = logging.getLogger(__name__)
 
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "/data/models"))
 DEVICE = os.getenv("DEVICE", "cuda")
-
-DEFAULT_MODEL = os.getenv("SAM21_DEFAULT_MODEL", "sam2.1_hiera_large")
 GPU_IDLE_TIMEOUT = int(os.getenv("GPU_IDLE_TIMEOUT_SECS", "3600"))
 
-# SAM2.1 model → (config relative path, checkpoint filename)
-# Config paths are resolved relative to the sam2 package at runtime.
-MODEL_CONFIGS: dict[str, str] = {
-    "sam2.1_hiera_tiny":      "configs/sam2.1/sam2.1_hiera_t.yaml",
-    "sam2.1_hiera_small":     "configs/sam2.1/sam2.1_hiera_s.yaml",
-    "sam2.1_hiera_base_plus": "configs/sam2.1/sam2.1_hiera_b+.yaml",
-    "sam2.1_hiera_large":     "configs/sam2.1/sam2.1_hiera_l.yaml",
-}
-CHECKPOINT_FILENAMES: dict[str, str] = {
-    "sam2.1_hiera_tiny":      "sam2.1_hiera_tiny.pt",
-    "sam2.1_hiera_small":     "sam2.1_hiera_small.pt",
-    "sam2.1_hiera_base_plus": "sam2.1_hiera_base_plus.pt",
-    "sam2.1_hiera_large":     "sam2.1_hiera_large.pt",
-}
-VALID_MODELS = set(MODEL_CONFIGS.keys())
+# ── Model config from environment ───────────────────────────────────────────────
+# MODEL_CONFIG and MODEL_CHECKPOINT are the only supported way to specify a model.
+# There is no fallback to a built-in model dictionary.
+_ENV_CONFIG = os.getenv("MODEL_CONFIG", "").strip()
+_ENV_CHECKPOINT = os.getenv("MODEL_CHECKPOINT", "").strip()
+
+if not _ENV_CONFIG or not _ENV_CHECKPOINT:
+    raise RuntimeError(
+        "MODEL_CONFIG and MODEL_CHECKPOINT environment variables must both be set.  "
+        "See docs/sam21-backend.md for configuration details."
+    )
+
+
+def _resolve_model_key() -> str:
+    """Return the logical model key from the checkpoint filename for logging."""
+    return Path(_ENV_CHECKPOINT).stem   # e.g. "sam2.1_hiera_large.pt" → "sam2.1_hiera_large"
+
+
+def _get_config_and_ckpt() -> tuple[str, Path]:
+    """Return (config_file, ckpt_path) from the environment.
+
+    MODEL_CHECKPOINT may be a bare filename (resolved under MODEL_DIR)
+    or an absolute path.
+    """
+    config_file = _ENV_CONFIG
+    ckpt_name = _ENV_CHECKPOINT
+    if os.path.isabs(ckpt_name):
+        ckpt_path = Path(ckpt_name)
+    else:
+        ckpt_path = MODEL_DIR / ckpt_name
+    return config_file, ckpt_path
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -118,19 +125,18 @@ def _load_image(url: str) -> Image.Image:
     return img
 
 
-def _load_predictor(model_key: str, device: str):
-    """Load SAM2ImagePredictor for the given model key."""
+def _load_predictor(device: str):
+    """Load SAM2ImagePredictor from MODEL_CONFIG / MODEL_CHECKPOINT env vars."""
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-    ckpt_path = MODEL_DIR / CHECKPOINT_FILENAMES[model_key]
+    config_file, ckpt_path = _get_config_and_ckpt()
     if not ckpt_path.exists():
         raise FileNotFoundError(
             f"Checkpoint not found: {ckpt_path}. "
             "Run download_models.py or rebuild the Docker image."
         )
-
-    config_file = MODEL_CONFIGS[model_key]
+    model_key = _resolve_model_key()
     logger.info("Loading SAM2.1 model: %s (config=%s, ckpt=%s)", model_key, config_file, ckpt_path)
 
     sam2_model = build_sam2(config_file, str(ckpt_path), device=device)
@@ -202,31 +208,21 @@ class NewModel(LabelStudioMLBase):
         """Called once per worker at startup (after gunicorn fork)."""
         self._start_idle_monitor()
         logger.info(
-            "SAM2.1 image backend ready (default model: %s, device: %s)",
-            DEFAULT_MODEL, DEVICE,
+            "SAM2.1 image backend ready (model: %s, device: %s)",
+            _resolve_model_key(), DEVICE,
         )
 
     # ── Model lifecycle ───────────────────────────────────────────────────────
 
-    def _ensure_model(self, model_key: str) -> None:
-        """Load model if different from currently loaded one (thread-safe)."""
+    def _ensure_model(self) -> None:
+        """Load the model (once per worker process, thread-safe)."""
         with self._lock:
-            if model_key == self._active_model_key and self._predictor is not None:
-                logger.debug("Using cached model: %s", model_key)
+            if self._predictor is not None:
+                logger.debug("Using cached model: %s", self._active_model_key)
                 return
 
-            # Unload previous model
-            if self._predictor is not None:
-                logger.info("Unloading model: %s", self._active_model_key)
-                del self._predictor
-                self._predictor = None
-                _gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-
-            # Load new model
-            self._predictor = _load_predictor(model_key, DEVICE)
-            self._active_model_key = model_key
+            self._predictor = _load_predictor(DEVICE)
+            self._active_model_key = _resolve_model_key()
             self._autocast_dtype = _detect_autocast_dtype(DEVICE)
 
     def _unload_model(self) -> None:
@@ -265,10 +261,7 @@ class NewModel(LabelStudioMLBase):
         t.start()
 
     # ── Model selection ───────────────────────────────────────────────────────
-
-    def _resolve_model_key(self) -> str:
-        """Return model key from SAM21_DEFAULT_MODEL env var."""
-        return DEFAULT_MODEL
+    # _resolve_model_key is a module-level function (see above class).
 
     # ── Prompt parsing ────────────────────────────────────────────────────────
 
@@ -383,8 +376,7 @@ class NewModel(LabelStudioMLBase):
             image_url = _to_internal_url(raw_image_url)
 
         # Resolve and load model
-        model_key = self._resolve_model_key()
-        self._ensure_model(model_key)
+        self._ensure_model()
 
         # Download image
         try:

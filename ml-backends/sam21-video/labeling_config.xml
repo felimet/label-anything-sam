@@ -80,7 +80,14 @@
 
   <Video name="video" value="$video" framerate="25.0"/>
 
-  <!-- VideoRectangle: draw on a frame to trigger tracking -->
+  <!-- Inference trigger (smart="true"):
+         - Confirm the toolbar's auto (⚡) Smart mode is enabled
+         - Pause video on the desired frame
+         - Select Object / Exclude from the Labels panel
+         - Draw a rectangle around the target and release → triggers tracking immediately
+         - Results are returned as a VideoRectangle sequence
+       Note: Label Studio's video KeyPointLabels do not carry frame information,
+             so only VideoRectangle box prompts are supported. -->
   <View className="sam21-section">
     <HyperText name="h_box" value="" className="sam21-label" inline="true">
       <span title="1. 確認工具列 auto（⚡）smart 模式已啟用。&#10;2. 在影片上暫停至目標畫格。&#10;3. 選標籤後拖拉矩形框住目標，放開即觸發追蹤。&#10;&#10;Object  → 正向框（追蹤目標物件）&#10;Exclude → 負向框（告知模型排除此區域）&#10;&#10;注意：僅支援 VideoRectangle 框選提示。">Box Prompt</span>
@@ -99,7 +106,20 @@
     </Labels>
   </View>
 
-<!-- Inference info: filled by ML backend after each prediction -->
+  <!-- Inference trigger: draw box on target frame → click Submit → SAM2.1 tracks forward
+       (VideoRectangle smart="true" does not auto-fire in all LS versions;
+        this Submit button is the explicit trigger, same pattern as sam3-video) -->
+  <View className="sam21-section">
+    <HyperText name="h_run" value="" className="sam21-label sam21-hint" inline="true">
+      <span title="1. 確認 smart 模式（⚡）已啟用。&#10;2. 在目標畫格框選物件（Object 正向 / Exclude 負向）。&#10;3. 點擊下方 Submit 按鈕觸發 SAM2.1 向前追蹤。&#10;&#10;注意：SAM2.1 不支援文字提示，此欄位僅作為追蹤觸發器。&#10;按下後即呼叫後端，追蹤 MAX_FRAMES_TO_TRACK 畫格。">Run Tracking</span>
+    </HyperText>
+    <TextArea name="run_trigger" toName="video"
+              placeholder="Draw box first, then click Submit to run SAM2.1 tracking…"
+              perRegion="false" rows="1"
+              maxSubmissions="1" showSubmitButton="true" editable="true"/>
+  </View>
+
+  <!-- Inference info: filled by ML backend after each prediction -->
   <View className="sam21-section sam21-scores">
     <HyperText name="h_scores" value="" className="sam21-label" inline="true">
       <span title="推理後由 ML backend 自動填入的追蹤資訊。">Tracking Info</span>

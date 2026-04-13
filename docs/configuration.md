@@ -239,7 +239,11 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `SAM21_DEFAULT_MODEL` | `sam2.1_hiera_large` | 使用的 SAM2.1 模型。修改後需重建 image（`make build-sam21-image build-sam21-video`）才生效。每個 key 對應固定的 `.yaml` config（`model.py MODEL_CONFIGS` 自動對應，不需手動指定）。可選值：`sam2.1_hiera_tiny` / `sam2.1_hiera_small` / `sam2.1_hiera_base_plus` / `sam2.1_hiera_large` |
+| `MODEL_CONFIG` | `configs/sam2.1/sam2.1_hiera_l.yaml` | SAM2.1 config YAML 檔路徑（支援絕對路徑）。設定後優先於內建模型，用於自訂模型 |
+| `MODEL_CHECKPOINT` | `sam2.1_hiera_large.pt` | SAM2.1 checkpoint 檔名（放於 `/data/models`）或絕對路徑。需與 `MODEL_CONFIG` 搭配使用 |
+| `SAM21_DEFAULT_MODEL` | `—` | **已移除**，請改用 `MODEL_CONFIG` + `MODEL_CHECKPOINT` |
+
+> 自訂模型用法：`.env.ml` 中同時設定 `MODEL_CONFIG` 與 `MODEL_CHECKPOINT` 即可以任意模型組合覆寫內建字典，無需修改程式碼。Checkpoint 需放在 `model-cache` volume（`/data/models`）或使用絕對路徑。
 
 可選 checkpoint 規格：
 

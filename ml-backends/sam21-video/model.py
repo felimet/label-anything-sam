@@ -6,15 +6,11 @@ Checkpoints are downloaded at build time (download_models.py).
 The model is loaded **lazily** on the first predict() call, after gunicorn
 fork.  Do NOT use gunicorn --preload.
 
-Model selection (persistent)
------------------------------
-Same mechanism as sam21-image: labeling_config.xml includes
-<Choices name="sam_model">, resolved in priority order:
-
-  1. context["result"] — Choices in current labeling session
-  2. task["annotations"][-1]["result"] — last saved annotation
-  3. /data/models/sam21_last_model.txt — persisted selection across restarts
-  4. SAM21_DEFAULT_MODEL env var (default: sam2.1_hiera_large)
+Model selection
+--------------
+MODEL_CONFIG and MODEL_CHECKPOINT environment variables specify the model.
+Both must be set at container startup; the backend raises RuntimeError if either
+is missing.  There is no built-in model dictionary.
 
 SAM2 video API (facebookresearch/sam2)
 --------------------------------------
@@ -63,24 +59,41 @@ logger = logging.getLogger(__name__)
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "/data/models"))
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 
-DEFAULT_MODEL = os.getenv("SAM21_DEFAULT_MODEL", "sam2.1_hiera_large")
 GPU_IDLE_TIMEOUT = int(os.getenv("GPU_IDLE_TIMEOUT_SECS", "3600"))
 MAX_FRAMES_TO_TRACK = int(os.getenv("MAX_FRAMES_TO_TRACK", "10"))
 MAX_FRAME_LONG_SIDE = int(os.getenv("MAX_FRAME_LONG_SIDE", "1024"))
 
-MODEL_CONFIGS: dict[str, str] = {
-    "sam2.1_hiera_tiny":      "configs/sam2.1/sam2.1_hiera_t.yaml",
-    "sam2.1_hiera_small":     "configs/sam2.1/sam2.1_hiera_s.yaml",
-    "sam2.1_hiera_base_plus": "configs/sam2.1/sam2.1_hiera_b+.yaml",
-    "sam2.1_hiera_large":     "configs/sam2.1/sam2.1_hiera_l.yaml",
-}
-CHECKPOINT_FILENAMES: dict[str, str] = {
-    "sam2.1_hiera_tiny":      "sam2.1_hiera_tiny.pt",
-    "sam2.1_hiera_small":     "sam2.1_hiera_small.pt",
-    "sam2.1_hiera_base_plus": "sam2.1_hiera_base_plus.pt",
-    "sam2.1_hiera_large":     "sam2.1_hiera_large.pt",
-}
-VALID_MODELS = set(MODEL_CONFIGS.keys())
+# ── Model config from environment ───────────────────────────────────────────────
+# MODEL_CONFIG and MODEL_CHECKPOINT are the only supported way to specify a model.
+# There is no fallback to a built-in model dictionary.
+_ENV_CONFIG = os.getenv("MODEL_CONFIG", "").strip()
+_ENV_CHECKPOINT = os.getenv("MODEL_CHECKPOINT", "").strip()
+
+if not _ENV_CONFIG or not _ENV_CHECKPOINT:
+    raise RuntimeError(
+        "MODEL_CONFIG and MODEL_CHECKPOINT environment variables must both be set.  "
+        "See docs/sam21-backend.md for configuration details."
+    )
+
+
+def _resolve_model_key() -> str:
+    """Return the logical model key from the checkpoint filename for logging."""
+    return Path(_ENV_CHECKPOINT).stem   # e.g. "sam2.1_hiera_large.pt" → "sam2.1_hiera_large"
+
+
+def _get_config_and_ckpt() -> tuple[str, Path]:
+    """Return (config_file, ckpt_path) from the environment.
+
+    MODEL_CHECKPOINT may be a bare filename (resolved under MODEL_DIR)
+    or an absolute path.
+    """
+    config_file = _ENV_CONFIG
+    ckpt_name = _ENV_CHECKPOINT
+    if os.path.isabs(ckpt_name):
+        ckpt_path = Path(ckpt_name)
+    else:
+        ckpt_path = MODEL_DIR / ckpt_name
+    return config_file, ckpt_path
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -115,18 +128,17 @@ def _download_ls_url(url: str) -> str:
     return filepath
 
 
-def _load_predictor(model_key: str, device: str):
-    """Load SAM2 video predictor for the given model key."""
+def _load_predictor(device: str):
+    """Load SAM2 video predictor from MODEL_CONFIG / MODEL_CHECKPOINT env vars."""
     from sam2.build_sam import build_sam2_video_predictor
 
-    ckpt_path = MODEL_DIR / CHECKPOINT_FILENAMES[model_key]
+    config_file, ckpt_path = _get_config_and_ckpt()
     if not ckpt_path.exists():
         raise FileNotFoundError(
             f"Checkpoint not found: {ckpt_path}. "
             "Run download_models.py or rebuild the Docker image."
         )
-
-    config_file = MODEL_CONFIGS[model_key]
+    model_key = _resolve_model_key()
     logger.info(
         "Loading SAM2.1 video predictor: %s (config=%s, ckpt=%s)",
         model_key, config_file, ckpt_path,
@@ -178,26 +190,18 @@ class NewModel(LabelStudioMLBase):
     def setup(self) -> None:
         self._start_idle_monitor()
         logger.info(
-            "SAM2.1 video backend ready (default model: %s, device: %s)",
-            DEFAULT_MODEL, DEVICE,
+            "SAM2.1 video backend ready (model: %s, device: %s)",
+            _resolve_model_key(), DEVICE,
         )
 
     # ── Model lifecycle ───────────────────────────────────────────────────────
 
-    def _ensure_model(self, model_key: str) -> None:
-        """Load model if different from currently loaded one (thread-safe)."""
+    def _ensure_model(self) -> None:
+        """Load the model (once per worker process, thread-safe)."""
         with self._lock:
-            if model_key == self._active_model_key and self._predictor is not None:
-                logger.debug("Using cached video predictor: %s", model_key)
-                return
-
             if self._predictor is not None:
-                logger.info("Unloading video predictor: %s", self._active_model_key)
-                del self._predictor
-                self._predictor = None
-                _gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                logger.debug("Using cached video predictor: %s", self._active_model_key)
+                return
 
             # Reset CUDA state after gunicorn fork (safe on first call per worker)
             try:
@@ -207,8 +211,8 @@ class NewModel(LabelStudioMLBase):
             except Exception:
                 pass
 
-            self._predictor = _load_predictor(model_key, DEVICE)
-            self._active_model_key = model_key
+            self._predictor = _load_predictor(DEVICE)
+            self._active_model_key = _resolve_model_key()
             self._autocast_dtype = _detect_autocast_dtype(DEVICE)
 
     def _unload_model(self) -> None:
@@ -245,11 +249,7 @@ class NewModel(LabelStudioMLBase):
         t.start()
 
     # ── Model selection ───────────────────────────────────────────────────────
-
-    def _resolve_model_key(self) -> str:
-        """Return model key from SAM21_DEFAULT_MODEL env var."""
-        return DEFAULT_MODEL
-
+    # _resolve_model_key is a module-level function (see above class).
     # ── predict() ────────────────────────────────────────────────────────────
 
     def predict(
@@ -272,28 +272,13 @@ class NewModel(LabelStudioMLBase):
         task = tasks[0]
         task_id = task.get("id")
 
-        # Determine annotation source ─────────────────────────────────────────
-        # Interactive mode: context contains the drawn VideoRectangle (smart="true")
-        # Batch mode:       context is empty; use latest saved annotation as prompt.
-        #
-        # NOTE: Label Studio's smart annotation only fires automatically for image
-        # tools (RectangleLabels, KeyPointLabels, BrushLabels).  VideoRectangle
-        # smart="true" is NOT triggered on draw.  Use the "Get Predictions" button
-        # (or Predict All from task list) to invoke batch mode instead.
-        annotation_result: list[dict]
-        if context and context.get("result"):
-            annotation_result = context["result"]
-            logger.info("Task %s: interactive prediction (context provided)", task_id)
-        else:
-            annotation_result = self._get_latest_annotation_result(task)
-            if not annotation_result:
-                logger.debug("Task %s: no context and no saved annotations — skipping", task_id)
-                return ModelResponse(predictions=[])
-            logger.warning(
-                "Task %s: batch prediction mode — using saved annotation as SAM2 prompt. "
-                "Trigger via 'Get Predictions' button in Label Studio.",
-                task_id,
-            )
+        # Interactive mode: context must contain drawn VideoRectangle result.
+        # Triggered by the "Submit" button on the run_trigger TextArea in the
+        # labeling config (same pattern as sam3-video).  VideoRectangle smart="true"
+        # may also trigger directly in newer Label Studio versions.
+        if not context or not context.get("result"):
+            return ModelResponse(predictions=[])
+        annotation_result = context["result"]
 
         # VideoRectangle metadata (fps, frames_count)
         vr_results = [r for r in annotation_result if r.get("type") == "videorectangle"]
@@ -318,8 +303,8 @@ class NewModel(LabelStudioMLBase):
             return ModelResponse(predictions=[])
 
         # Resolve model and load
-        model_key = self._resolve_model_key()
-        self._ensure_model(model_key)
+        model_key = _resolve_model_key()
+        self._ensure_model()
 
         # Resolve video path
         _raw_video_url = task["data"].get(value, "")
@@ -585,22 +570,6 @@ class NewModel(LabelStudioMLBase):
         return sequence, all_obj_ids, info_lines
 
     # ── Helpers ────────────────────────────────────────────────────────────────
-
-    def _get_latest_annotation_result(self, task: dict) -> list[dict]:
-        """Return the result list from the task's latest saved annotation.
-
-        Used in batch prediction mode when no interactive context is provided.
-        Only returns results if at least one videorectangle entry exists.
-        """
-        annotations = task.get("annotations") or []
-        if not annotations:
-            return []
-        # Use annotation with highest id (most recently created)
-        latest = max(annotations, key=lambda a: a.get("id", 0))
-        result = latest.get("result") or []
-        if any(r.get("type") == "videorectangle" for r in result):
-            return result
-        return []
 
     def _get_geo_prompts(self, context: dict) -> list[dict]:
         """Parse VideoRectangle items into prompt dicts.
