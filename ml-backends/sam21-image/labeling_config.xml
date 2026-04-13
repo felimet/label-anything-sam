@@ -78,21 +78,7 @@
 
   <Image name="image" value="$image" zoom="true" zoomControl="true"/>
 
-  <!-- Model selection — persisted per-task, default base_plus -->
-  <View className="sam21-section">
-    <HyperText name="h_model" value="" className="sam21-label sam21-hint" inline="true">
-      <span title="選擇 SAM2.1 模型變體。&#10;選擇後系統會記住此設定，下次推理自動沿用，直到再次更改。&#10;&#10;Tiny  (~38M params)  — 最快，VRAM 最少&#10;Small (~46M params)  — 快&#10;Base+ (~80M params)  — 預設，速度與精度平衡&#10;Large (~224M params) — 最精準，需較多 VRAM">Model</span>
-    </HyperText>
-    <Choices name="sam_model" toName="image"
-             choice="single" showInline="true" required="false">
-      <Choice value="sam2.1_hiera_tiny"      alias="Tiny   (~38M)"/>
-      <Choice value="sam2.1_hiera_small"     alias="Small  (~46M)"/>
-      <Choice value="sam2.1_hiera_base_plus" alias="Base+  (~80M)"/>
-      <Choice value="sam2.1_hiera_large"     alias="Large  (~224M)" selected="true"/>
-    </Choices>
-  </View>
-
-  <!-- Prompt: positive / negative keypoints -->
+<!-- Prompt: positive / negative keypoints -->
   <View className="sam21-section">
     <HyperText name="h_kp" value="" className="sam21-label" inline="true">
       <span title="1. 點選工具列的 auto（⚡）圖示啟用 smart 模式。&#10;2. 選 Object（正向，標記目標）&#10;   或 Exclude（負向，標記排除區域）。&#10;3. 點擊影像上的位置，立即觸發推理。">Keypoint Prompt</span>

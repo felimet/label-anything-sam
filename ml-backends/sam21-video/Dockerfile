@@ -66,7 +66,6 @@ RUN --mount=type=cache,target=${PIP_CACHE_DIR},sharing=locked \
     && rm -rf /sam2_src/.git /sam2_src/notebooks /sam2_src/demo
 
 # ── Download all 4 SAM2.1 checkpoints ────────────────────────
-# ── Download all 4 SAM2.1 checkpoints ────────────────────────
 # Primary path:  huggingface_hub → /data/models/
 # Fallback path: download_ckpts.sh (Meta CDN) when HF is unreachable
 #

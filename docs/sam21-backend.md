@@ -25,16 +25,11 @@ SAM2.1（Segment Anything Model 2.1）是 Meta 釋出的分割模型，支援靜
 - `gunicorn.conf.py` 的 `post_fork` hook 重置 PyTorch CUDA 狀態
 - 模組層級 **禁止** 呼叫 CUDA 初始化函式
 
-## 模型選擇（持久化）
+## 模型選擇
 
-labeling_config.xml 內含 `<Choices name="sam_model">` checkbox，每次 `predict()` 按以下優先序決定使用的模型：
+模型由 `.env.ml` 的 `SAM21_DEFAULT_MODEL` 決定，重建 image 後生效。每次 `predict()` 呼叫直接使用此值（`_resolve_model_key()` 回傳 `DEFAULT_MODEL`）。
 
-| 優先序 | 來源 |
-|--------|------|
-| 1 | `context["result"]`：當前標注 session 的 Choices 結果 |
-| 2 | `task["annotations"][-1]["result"]`：最後一次儲存的標注 |
-| 3 | `/data/models/sam21_last_model.txt`：跨重啟持久化選擇 |
-| 4 | `SAM21_DEFAULT_MODEL` env var（預設 `sam2.1_hiera_large`） |
+切換模型步驟：修改 `.env.ml` 的 `SAM21_DEFAULT_MODEL` → 執行 `make build-sam21-image build-sam21-video` → `make up-sam21-image up-sam21-video`。
 
 切換模型時，後端自動 unload 舊模型（`del predictor` + `cuda.empty_cache()`）再載入新模型。
 
@@ -97,7 +92,6 @@ Settings → Labeling Interface → Code → 貼上 XML
 
 | 控制項 | 類型 | 用途 |
 |--------|------|------|
-| `<Choices name="sam_model">` | 模型選擇 | 選擇 SAM2.1 變體；結果自動持久化 |
 | `<KeyPointLabels smart="true">` | 點擊提示 | Object（正向）/ Exclude（負向）點 |
 | `<RectangleLabels smart="true">` | 框選提示 | Object（正向框）/ Exclude（負向框，轉為背景中心點） |
 | `<BrushLabels smart="true">` | 輸出 | SAM2.1 分割遮罩（RLE 格式）；`smart="true"` 為必要條件 |
@@ -121,7 +115,7 @@ Label Studio（點擊事件）
     │  POST /predict  { task, context: {keypointlabels | rectanglelabels} }
     ▼
 NewModel.predict()
-    ├── _resolve_model_key()          ← 4 優先序決定模型
+    ├── _resolve_model_key()          ← 讀取 SAM21_DEFAULT_MODEL env var
     ├── _ensure_model()               ← lazy load / swap model
     ├── _load_image()                 ← 本機路徑直接讀取；s3:// → LS resolve endpoint；http → Token auth GET
     ├── _parse_prompts()              ← context → point_coords, point_labels, box
@@ -131,9 +125,9 @@ NewModel.predict()
          ├── predictor.predict(point_coords, point_labels, box, multimask_output=True)
          │    → masks [N,H,W] bool, scores [N] float
          ├── 取最高分 mask（argmax）
-         ├── _mask_to_rle()          ← mask.T → brush.mask2rle（W,H 慣例）→ list[int]
+         ├── _mask_to_rle()          ← mask * 255 → brush.mask2rle → list[int]
          └── scores TextArea         ← "model: <key>\n#1  score=0.xxxx\n#2 … ✓ 最高分"
-    │  ModelResponse { brushlabels（單一最佳 mask）+ scores textarea + sam_model choices }
+    │  ModelResponse { brushlabels（單一最佳 mask）+ scores textarea }
     ▼
 Label Studio（渲染遮罩覆蓋層）
 ```
@@ -151,10 +145,10 @@ Settings → Labeling Interface → Code → 貼上 XML
 | 控制項 | 類型 | 用途 |
 |--------|------|------|
 | `<VideoRectangle name="box" smart="true">` | 框選提示 | 在目標畫格拉框，觸發向前追蹤 |
-| `<KeyPointLabels name="kp" smart="true">` | 點擊提示 | Object（正向點）/ Exclude（負向點） |
 | `<Labels name="videoLabels">` | 追蹤標籤 | Object（正向）/ Exclude（負向） |
-| `<Choices name="sam_model">` | 模型選擇 | 選擇 SAM2.1 變體 |
 | `<TextArea name="scores">` | 追蹤資訊 | 由 ML backend 自動填入：模型名稱 + 逐畫格 obj/mask info |
+
+> `KeyPointLabels` 已從影片後端移除：Label Studio 的 `KeyPointLabels` 僅支援 `Image` tag，不支援 `Video`；影片模式的點提示目前無對應 tag。
 
 ### 推論流程（video）
 
@@ -164,7 +158,6 @@ Label Studio（使用者在畫格 N 畫框）
     ▼
 NewModel.predict()
     ├── _get_geo_prompts()            ← VideoRectangle → [{type:"box", frame_idx, x_pct…}]
-    │                                    KeyPointLabels → [{type:"point", frame_idx, x_pct, is_positive…}]
     ├── _resolve_model_key() / _ensure_model()
     ├── 下載影片（S3/MinIO/本機，含 token auth；無副檔名時建立 symlink）
     └── _predict_sam2()
@@ -178,7 +171,7 @@ NewModel.predict()
          │    → binary = masks > 0 → _mask_to_bbox_pct() → VideoRectangle sequence
          └── predictor.reset_state()  ← 必定執行（finally）
     │  ModelResponse { videorectangle sequence（含原始 context + 追蹤結果）
-    │                  + scores textarea + sam_model choices }
+    │                  + scores textarea }
     ▼
 Label Studio（渲染多畫格追蹤框）
 ```
@@ -218,11 +211,11 @@ Label Studio（渲染多畫格追蹤框）
 
 **修正**：移除 `setup()` 內的 `set_extra_params` 呼叫。SAM2.1 未實作 `fit()`，`predict_only` hint 無功能作用。程式碼變更後需 `build-sam21-*` + `up-sam21-*` 重建映像。
 
-### Brush mask 不顯示 / 顯示異常大區域（RLE 轉置問題）
+### Brush mask 不顯示（RLE 值域問題）
 
-`label_studio_converter.brush.mask2rle` 內部使用 `mask.flatten(order='F')`，期望傳入 `(W, H)` 格式（寬度在前）。SAM2 回傳的 mask 為 numpy 標準 `(H, W)` 格式，未轉置直接傳入會導致 RLE 編碼錯位，Label Studio 前端解碼後顯示為滿版雜訊或異常大區域。
+`label_studio_converter.brush.mask2rle` 期望輸入值域為 `{0, 255}`。SAM2 回傳 bool mask，`astype(uint8)` 後值為 `{0, 1}`；部分版本的 converter 將值為 `1` 的像素判定為背景，導致 RLE 全空，前端無任何 mask 顯示。
 
-**修正**：`_mask_to_rle` 在呼叫 `mask2rle` 前先執行 `mask.T`（轉置為 W×H）。程式碼變更後需 `build-sam21-image` + `up-sam21-image`。
+**修正**：`_mask_to_rle` 改為 `mask.astype(np.uint8) * 255` 再傳入 `mask2rle`，與 sam3-image 慣例一致。程式碼變更後需 `build-sam21-image` + `up-sam21-image`。
 
 ### 影像後端僅回傳最高分 mask
 

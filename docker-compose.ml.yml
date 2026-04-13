@@ -28,6 +28,7 @@ services:
     env_file:
       - .env.ml
     environment:
+      - LOG_LEVEL=DEBUG
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
       # GPU assignment and worker count are derived from SAM3_IMAGE_GPU_INDEX /
@@ -45,7 +46,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      test: ["CMD-SHELL", "curl -sf $${BASIC_AUTH_USER:+-u $$BASIC_AUTH_USER:$$BASIC_AUTH_PASS} http://localhost:9090/health"]
       interval: 30s
       timeout: 15s
       start_period: 300s
@@ -70,6 +71,7 @@ services:
     env_file:
       - .env.ml
     environment:
+      - LOG_LEVEL=DEBUG
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
       # GPU assignment and worker count are derived from SAM3_VIDEO_GPU_INDEX /
@@ -87,7 +89,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      test: ["CMD-SHELL", "curl -sf $${BASIC_AUTH_USER:+-u $$BASIC_AUTH_USER:$$BASIC_AUTH_PASS} http://localhost:9090/health"]
       interval: 30s
       timeout: 15s
       start_period: 300s
@@ -112,6 +114,7 @@ services:
     env_file:
       - .env.ml
     environment:
+      - LOG_LEVEL=DEBUG
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
     volumes:
@@ -125,7 +128,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      test: ["CMD-SHELL", "curl -sf $${BASIC_AUTH_USER:+-u $$BASIC_AUTH_USER:$$BASIC_AUTH_PASS} http://localhost:9090/health"]
       interval: 30s
       timeout: 15s
       start_period: 300s
@@ -147,6 +150,7 @@ services:
     env_file:
       - .env.ml
     environment:
+      - LOG_LEVEL=DEBUG
       - LABEL_STUDIO_URL=http://label-studio:8080
       - PORT=9090
     volumes:
@@ -160,7 +164,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      test: ["CMD-SHELL", "curl -sf $${BASIC_AUTH_USER:+-u $$BASIC_AUTH_USER:$$BASIC_AUTH_PASS} http://localhost:9090/health"]
       interval: 30s
       timeout: 15s
       start_period: 300s

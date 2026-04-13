@@ -239,7 +239,7 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
-| `SAM21_DEFAULT_MODEL` | `sam2.1_hiera_large` | 後端啟動時的預設模型。可在標注介面的 Choices checkbox 切換；切換後系統記憶最後一次選擇。可選值：`sam2.1_hiera_tiny` / `sam2.1_hiera_small` / `sam2.1_hiera_base_plus` / `sam2.1_hiera_large` |
+| `SAM21_DEFAULT_MODEL` | `sam2.1_hiera_large` | 使用的 SAM2.1 模型。修改後需重建 image（`make build-sam21-image build-sam21-video`）才生效。每個 key 對應固定的 `.yaml` config（`model.py MODEL_CONFIGS` 自動對應，不需手動指定）。可選值：`sam2.1_hiera_tiny` / `sam2.1_hiera_small` / `sam2.1_hiera_base_plus` / `sam2.1_hiera_large` |
 
 可選 checkpoint 規格：
 

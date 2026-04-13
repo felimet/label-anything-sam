@@ -61,7 +61,6 @@ logger = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "/data/models"))
-LAST_MODEL_FILE = MODEL_DIR / "sam21_last_model.txt"
 DEVICE: str = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 
 DEFAULT_MODEL = os.getenv("SAM21_DEFAULT_MODEL", "sam2.1_hiera_large")
@@ -155,23 +154,6 @@ def _detect_autocast_dtype(device: str) -> Optional[torch.dtype]:
         return None
 
 
-def _save_last_model(model_key: str) -> None:
-    try:
-        MODEL_DIR.mkdir(parents=True, exist_ok=True)
-        LAST_MODEL_FILE.write_text(model_key)
-    except Exception as exc:
-        logger.warning("Could not save last model key: %s", exc)
-
-
-def _read_last_model() -> Optional[str]:
-    try:
-        if LAST_MODEL_FILE.exists():
-            key = LAST_MODEL_FILE.read_text().strip()
-            if key in VALID_MODELS:
-                return key
-    except Exception:
-        pass
-    return None
 
 
 # ── Main Model Class ───────────────────────────────────────────────────────────
@@ -228,7 +210,6 @@ class NewModel(LabelStudioMLBase):
             self._predictor = _load_predictor(model_key, DEVICE)
             self._active_model_key = model_key
             self._autocast_dtype = _detect_autocast_dtype(DEVICE)
-            _save_last_model(model_key)
 
     def _unload_model(self) -> None:
         with self._lock:
@@ -265,30 +246,9 @@ class NewModel(LabelStudioMLBase):
 
     # ── Model selection ───────────────────────────────────────────────────────
 
-    def _resolve_model_key(self, tasks: List[dict], context: Optional[dict]) -> str:
-        if context:
-            key = self._extract_choices_from_results(context.get("result", []))
-            if key:
-                return key
-        for task in tasks:
-            annotations = task.get("annotations") or []
-            if annotations:
-                key = self._extract_choices_from_results(annotations[-1].get("result", []))
-                if key:
-                    return key
-        key = _read_last_model()
-        if key:
-            return key
+    def _resolve_model_key(self) -> str:
+        """Return model key from SAM21_DEFAULT_MODEL env var."""
         return DEFAULT_MODEL
-
-    @staticmethod
-    def _extract_choices_from_results(results: List[dict]) -> Optional[str]:
-        for result in results:
-            if result.get("from_name") == "sam_model" and result.get("type") == "choices":
-                choices = result.get("value", {}).get("choices", [])
-                if choices and choices[0] in VALID_MODELS:
-                    return choices[0]
-        return None
 
     # ── predict() ────────────────────────────────────────────────────────────
 
@@ -300,33 +260,65 @@ class NewModel(LabelStudioMLBase):
     ) -> ModelResponse:
         NewModel._last_activity = _time_module.monotonic()
 
-        if not context or not context.get("result"):
+        if not tasks:
             return ModelResponse(predictions=[])
 
-        from_name, to_name, value = self.get_first_tag_occurence("VideoRectangle", "Video")
+        try:
+            from_name, to_name, value = self.get_first_tag_occurence("VideoRectangle", "Video")
+        except Exception as exc:
+            logger.error("get_first_tag_occurence failed: %s", exc)
+            return ModelResponse(predictions=[])
 
         task = tasks[0]
         task_id = task.get("id")
 
+        # Determine annotation source ─────────────────────────────────────────
+        # Interactive mode: context contains the drawn VideoRectangle (smart="true")
+        # Batch mode:       context is empty; use latest saved annotation as prompt.
+        #
+        # NOTE: Label Studio's smart annotation only fires automatically for image
+        # tools (RectangleLabels, KeyPointLabels, BrushLabels).  VideoRectangle
+        # smart="true" is NOT triggered on draw.  Use the "Get Predictions" button
+        # (or Predict All from task list) to invoke batch mode instead.
+        annotation_result: list[dict]
+        if context and context.get("result"):
+            annotation_result = context["result"]
+            logger.info("Task %s: interactive prediction (context provided)", task_id)
+        else:
+            annotation_result = self._get_latest_annotation_result(task)
+            if not annotation_result:
+                logger.debug("Task %s: no context and no saved annotations — skipping", task_id)
+                return ModelResponse(predictions=[])
+            logger.warning(
+                "Task %s: batch prediction mode — using saved annotation as SAM2 prompt. "
+                "Trigger via 'Get Predictions' button in Label Studio.",
+                task_id,
+            )
+
         # VideoRectangle metadata (fps, frames_count)
-        vr_results = [r for r in context["result"] if r.get("type") == "videorectangle"]
+        vr_results = [r for r in annotation_result if r.get("type") == "videorectangle"]
         frames_count: Optional[int] = None
         duration: Optional[float] = None
         fps: Optional[float] = None
         if vr_results:
-            _fc = vr_results[0]["value"].get("framesCount", 0)
-            _dur = vr_results[0]["value"].get("duration", 1.0)
-            frames_count = _fc
-            duration = _dur
-            fps = _fc / _dur if _dur else 25.0
+            _fc = vr_results[0]["value"].get("framesCount") or 0
+            _dur = vr_results[0]["value"].get("duration") or 0
+            # Only accept values if both are positive; otherwise fall through to video probe
+            frames_count = int(_fc) if _fc > 0 else None
+            duration = float(_dur) if _dur > 0 else None
+            fps = (float(_fc) / float(_dur)) if (_fc > 0 and _dur > 0) else None
+            logger.debug(
+                "Context metadata: framesCount=%s duration=%s → fps=%s", _fc, _dur, fps
+            )
 
         # Parse prompts
-        geo_prompts = self._get_geo_prompts(context)
+        geo_prompts = self._get_geo_prompts({"result": annotation_result})
         if not geo_prompts:
+            logger.debug("Task %s: no geometric prompts found in annotation result", task_id)
             return ModelResponse(predictions=[])
 
         # Resolve model and load
-        model_key = self._resolve_model_key(tasks, context)
+        model_key = self._resolve_model_key()
         self._ensure_model(model_key)
 
         # Resolve video path
@@ -357,15 +349,18 @@ class NewModel(LabelStudioMLBase):
                 os.symlink(video_path, _linked)
             video_path = _linked
 
-        # Probe video metadata if not available from context
-        if fps is None:
+        # Probe video metadata if context didn't provide valid values
+        if fps is None or fps <= 0 or frames_count is None or frames_count <= 0:
             cap = cv2.VideoCapture(video_path)
             _fps = cap.get(cv2.CAP_PROP_FPS)
             _n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             cap.release()
             fps = _fps if _fps > 0 else 25.0
-            frames_count = _n
-            duration = _n / fps
+            if frames_count is None or frames_count <= 0:
+                frames_count = _n
+            if duration is None or duration <= 0:
+                duration = _n / fps
+            logger.debug("Probed video: fps=%.2f frames=%d duration=%.2f", fps, frames_count, duration)
 
         # Run inference
         try:
@@ -376,9 +371,14 @@ class NewModel(LabelStudioMLBase):
             logger.error("Video predict failed: %s", exc, exc_info=True)
             return ModelResponse(predictions=[])
 
-        # Merge context sequence with new predictions
+        # Merge: keep prior context frames not covered by new predictions (predictions win)
         context_sequence = vr_results[0]["value"].get("sequence", []) if vr_results else []
-        full_sequence = context_sequence + sequence
+        if context_sequence and sequence:
+            pred_frames = {s["frame"] for s in sequence}
+            prior = [s for s in context_sequence if s["frame"] not in pred_frames]
+            full_sequence = sorted(prior + sequence, key=lambda s: s["frame"])
+        else:
+            full_sequence = sequence
 
         import uuid as _uuid
         result_items: list[dict] = [{
@@ -390,8 +390,7 @@ class NewModel(LabelStudioMLBase):
             "from_name": from_name,
             "to_name": to_name,
             "type": "videorectangle",
-            "origin": "manual",
-            "id": list(all_obj_ids)[0] if all_obj_ids else "obj0",
+            "id": list(all_obj_ids)[0] if all_obj_ids else str(_uuid.uuid4())[:8],
         }]
 
         result_items.append({
@@ -400,16 +399,6 @@ class NewModel(LabelStudioMLBase):
             "to_name": to_name,
             "type": "textarea",
             "value": {"text": [f"model: {model_key}\n" + ("\n".join(info_lines) if info_lines else "—")]},
-        })
-
-        # Sync UI checkbox to the model that was actually used for this prediction.
-        # Without this, Label Studio shows the XML default on tasks with no saved annotation.
-        result_items.append({
-            "id": str(_uuid.uuid4())[:8],
-            "type": "choices",
-            "value": {"choices": [model_key]},
-            "from_name": "sam_model",
-            "to_name": to_name,
         })
 
         prediction = PredictionValue(result=result_items)
@@ -427,6 +416,10 @@ class NewModel(LabelStudioMLBase):
         fps: float,
     ) -> tuple[list[dict], set[str], list[str]]:
         """Run SAM2 video predictor and return (sequence, obj_ids, info_lines)."""
+        if not fps or fps <= 0:
+            logger.warning("Invalid fps=%s passed to _predict_sam2, defaulting to 25.0", fps)
+            fps = 25.0
+
         if DEVICE == "cuda":
             torch.cuda.empty_cache()
             _gc.collect()
@@ -578,7 +571,7 @@ class NewModel(LabelStudioMLBase):
                                     "height": bbox["height"],
                                     "enabled": True,
                                     "rotation": 0,
-                                    "time": rel_idx / fps,
+                                    "time": abs_frame / fps,  # seconds from video start
                                 })
 
             finally:
@@ -592,6 +585,22 @@ class NewModel(LabelStudioMLBase):
         return sequence, all_obj_ids, info_lines
 
     # ── Helpers ────────────────────────────────────────────────────────────────
+
+    def _get_latest_annotation_result(self, task: dict) -> list[dict]:
+        """Return the result list from the task's latest saved annotation.
+
+        Used in batch prediction mode when no interactive context is provided.
+        Only returns results if at least one videorectangle entry exists.
+        """
+        annotations = task.get("annotations") or []
+        if not annotations:
+            return []
+        # Use annotation with highest id (most recently created)
+        latest = max(annotations, key=lambda a: a.get("id", 0))
+        result = latest.get("result") or []
+        if any(r.get("type") == "videorectangle" for r in result):
+            return result
+        return []
 
     def _get_geo_prompts(self, context: dict) -> list[dict]:
         """Parse VideoRectangle items into prompt dicts.

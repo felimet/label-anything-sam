@@ -62,7 +62,6 @@ logger = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "/data/models"))
-LAST_MODEL_FILE = MODEL_DIR / "sam21_last_model.txt"
 DEVICE = os.getenv("DEVICE", "cuda")
 
 DEFAULT_MODEL = os.getenv("SAM21_DEFAULT_MODEL", "sam2.1_hiera_large")
@@ -154,6 +153,8 @@ def _detect_autocast_dtype(device: str) -> Optional[torch.dtype]:
         props = torch.cuda.get_device_properties(0)
         major = props.major
         if major >= 8:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
             return torch.bfloat16
         if major >= 7:
             return torch.float16
@@ -165,31 +166,17 @@ def _detect_autocast_dtype(device: str) -> Optional[torch.dtype]:
 def _mask_to_rle(mask: np.ndarray) -> list:
     """Convert boolean mask [H, W] to Label Studio RLE (list of ints).
 
-    mask2rle uses Fortran-order flatten, which expects a (W, H) array
-    (width-major).  SAM2 returns (H, W), so we transpose before encoding.
+    label_studio_converter expects pixel values in {0, 255}.
+    SAM2 returns bool [H, W]; astype(uint8) gives {0, 1} so multiply by 255.
     """
-    return brush.mask2rle(mask.T.astype(np.uint8))
+    mask_u8 = mask.astype(np.uint8) * 255
+    rle = brush.mask2rle(mask_u8)
+    logger.debug(
+        "_mask_to_rle: mask shape=%s nonzero=%d rle_len=%d rle_head=%s",
+        mask.shape, int(mask.sum()), len(rle), rle[:10],
+    )
+    return rle
 
-
-def _save_last_model(model_key: str) -> None:
-    """Persist last used model key to disk."""
-    try:
-        MODEL_DIR.mkdir(parents=True, exist_ok=True)
-        LAST_MODEL_FILE.write_text(model_key)
-    except Exception as exc:
-        logger.warning("Could not save last model key: %s", exc)
-
-
-def _read_last_model() -> Optional[str]:
-    """Read persisted model key from disk."""
-    try:
-        if LAST_MODEL_FILE.exists():
-            key = LAST_MODEL_FILE.read_text().strip()
-            if key in VALID_MODELS:
-                return key
-    except Exception:
-        pass
-    return None
 
 
 # ── Main Model Class ───────────────────────────────────────────────────────────
@@ -241,7 +228,6 @@ class NewModel(LabelStudioMLBase):
             self._predictor = _load_predictor(model_key, DEVICE)
             self._active_model_key = model_key
             self._autocast_dtype = _detect_autocast_dtype(DEVICE)
-            _save_last_model(model_key)
 
     def _unload_model(self) -> None:
         """Release VRAM after idle timeout."""
@@ -280,56 +266,9 @@ class NewModel(LabelStudioMLBase):
 
     # ── Model selection ───────────────────────────────────────────────────────
 
-    def _resolve_model_key(
-        self,
-        tasks: List[dict],
-        context: Optional[dict],
-    ) -> str:
-        """Determine which model to use, in priority order.
-
-        1. Choices in current context (user just changed the checkbox)
-        2. Choices in latest saved annotation
-        3. Persisted selection on disk
-        4. Default model (env var / hardcoded)
-        """
-        # 1. Current context results
-        if context:
-            key = self._extract_choices_from_results(context.get("result", []))
-            if key:
-                logger.debug("Model from context: %s", key)
-                return key
-
-        # 2. Latest annotation
-        for task in tasks:
-            annotations = task.get("annotations") or []
-            if annotations:
-                latest = annotations[-1]
-                key = self._extract_choices_from_results(latest.get("result", []))
-                if key:
-                    logger.debug("Model from annotation: %s", key)
-                    return key
-
-        # 3. Persisted selection
-        key = _read_last_model()
-        if key:
-            logger.debug("Model from disk: %s", key)
-            return key
-
-        # 4. Default
-        logger.debug("Using default model: %s", DEFAULT_MODEL)
+    def _resolve_model_key(self) -> str:
+        """Return model key from SAM21_DEFAULT_MODEL env var."""
         return DEFAULT_MODEL
-
-    @staticmethod
-    def _extract_choices_from_results(results: List[dict]) -> Optional[str]:
-        """Extract sam_model value from a result list."""
-        for result in results:
-            if result.get("from_name") == "sam_model" and result.get("type") == "choices":
-                choices = result.get("value", {}).get("choices", [])
-                if choices:
-                    key = choices[0]
-                    if key in VALID_MODELS:
-                        return key
-        return None
 
     # ── Prompt parsing ────────────────────────────────────────────────────────
 
@@ -444,7 +383,7 @@ class NewModel(LabelStudioMLBase):
             image_url = _to_internal_url(raw_image_url)
 
         # Resolve and load model
-        model_key = self._resolve_model_key(tasks, context)
+        model_key = self._resolve_model_key()
         self._ensure_model(model_key)
 
         # Download image
@@ -471,16 +410,6 @@ class NewModel(LabelStudioMLBase):
         except Exception as exc:
             logger.error("SAM2.1 inference error: %s", exc, exc_info=True)
             return ModelResponse(predictions=[])
-
-        # Sync UI checkbox to the model that was actually used for this prediction.
-        # Without this, Label Studio shows the XML default on tasks with no saved annotation.
-        results.append({
-            "id": str(uuid4())[:8],
-            "type": "choices",
-            "value": {"choices": [model_key]},
-            "from_name": "sam_model",
-            "to_name": "image",
-        })
 
         return ModelResponse(predictions=[{"result": results, "score": float(np.mean(scores_list)) if scores_list else 0.0}])
 
@@ -537,7 +466,9 @@ class NewModel(LabelStudioMLBase):
             "score": best_score,
         }]
 
-        # Append score summary to TextArea (all candidates for reference)
+        # Append score summary to TextArea (all candidates for reference).
+        # Fixed ID so Label Studio can update the existing result in-place on each
+        # new prediction, rather than accumulating multiple TextArea submissions.
         if scores_list:
             score_lines = "\n".join(
                 [f"model: {self._active_model_key}"]
@@ -545,7 +476,7 @@ class NewModel(LabelStudioMLBase):
                    for i, s in enumerate(scores_list)]
             )
             results.append({
-                "id": str(uuid4())[:8],
+                "id": "sam21_scores",
                 "type": "textarea",
                 "value": {"text": [score_lines]},
                 "to_name": "image",
