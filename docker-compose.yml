@@ -1,0 +1,237 @@
+name: label-anything-sam
+
+# ============================================================
+# Label Studio — Full Stack
+# Services: PostgreSQL · Redis · MinIO · Label Studio · Nginx
+# Cloudflare Tunnel routes:
+#   label-studio.example.com → nginx:80 → label-studio:8080
+#   minio-api.example.com        → minio:9000 (GET/HEAD WAF rule on CF)
+#   minio-console.example.com        → minio:9001 (GET/HEAD WAF rule on CF)
+# MinIO Admin UI (Full):
+#   http://localhost:19002       → minio:9002 (host-only; not via CF Tunnel)
+#   Using firstfinger/minio — restores Admin Console removed from MinIO CE
+#   after 2025-05-24. See: https://github.com/Harsh-2002/MinIO
+# ============================================================
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────
+  pg-db:
+    image: "postgres:${POSTGRES_VERSION:-17}"
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-labelstudio}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-labelstudio}
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+      - ./postgres/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-labelstudio} -d ${POSTGRES_DB:-labelstudio}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - internal
+
+  # ── Redis ───────────────────────────────────────────────────
+  redis:
+    image: "redis:${REDIS_VERSION:-8.6.2}"
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --appendfsync everysec
+    volumes:
+      - ./redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ── MinIO ───────────────────────────────────────────────────
+  minio:
+    # firstfinger/minio: daily build from MinIO upstream source with full Admin Console restored.
+    # Exposes: 9000 (S3 API), 9001 (MinIO Console), 9002 (Full Admin UI).
+    # Background: MinIO CE removed all Admin UI on 2025-05-24; last CE image with Admin UI was
+    # RELEASE.2025-04-22T22-12-26Z. minio/minio Docker Hub stopped after RELEASE.2025-09-07T16-13-09Z.
+    # Ref: https://github.com/Harsh-2002/MinIO  https://hub.docker.com/r/firstfinger/minio
+    image: "firstfinger/minio:${MINIO_VERSION:-latest-amd64}"
+    # image: "minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}"  # last CE image with Admin UI
+    restart: unless-stopped
+    logging: *default-logging
+    # firstfinger/minio: ENTRYPOINT=[] CMD=[/usr/bin/start.sh]
+    # start.sh bootstraps minio server + Admin UI (port 9002) — do NOT override entrypoint/command.
+    # Console address is passed via env var instead of --console-address CLI flag.
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      # MinIO Console listens on :9001 (replaces --console-address CLI flag)
+      - MINIO_CONSOLE_ADDRESS=:9001
+      # External domain — presigned URLs will use this base (S3 API)
+      - MINIO_SERVER_URL=https://${MINIO_EXTERNAL_HOST:-minio.example.com}
+      # Console external URL — must differ from MINIO_SERVER_URL.
+      # Required for login to work behind a reverse proxy / Cloudflare Tunnel:
+      # MinIO CSRF validation compares Origin against this value.
+      - MINIO_BROWSER_REDIRECT_URL=https://${MINIO_CONSOLE_HOST:-minio-console.example.com}
+      # CORS — allow browser uploads via presigned URLs.
+      # S3 PutBucketCors API was removed from MinIO open source; use server-level config.
+      - MINIO_API_CORS_ALLOW_ORIGIN=*
+      # KMS master key for SSE-S3 bucket encryption (no external KES required).
+      # Format: <key-name>:<base64-encoded-32-byte-key>
+      # Generate: printf 'minio-sse-key:'; openssl rand -base64 32
+      # Leave empty to disable SSE-S3.
+      - MINIO_KMS_SECRET_KEY=${MINIO_KMS_SECRET_KEY:-}
+    volumes:
+      - ./minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - internal
+
+  # ── MinIO Init (one-shot bucket + CORS setup) ───────────────
+  minio-init:
+    image: "minio/mc:${MC_VERSION:-RELEASE.2025-08-13T08-35-41Z}"
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_BUCKET=${MINIO_BUCKET:-label-studio-bucket}
+      # Service account credentials — used to create a least-privilege access key for Label Studio.
+      # Set in .env; leave empty to skip service account provisioning (root credentials will be used).
+      - MINIO_LS_ACCESS_ID=${MINIO_LS_ACCESS_ID:-}
+      - MINIO_LS_SECRET_KEY=${MINIO_LS_SECRET_KEY:-}
+      # Optional bucket quota in GiB. Leave empty to disable.
+      - MINIO_BUCKET_QUOTA_GB=${MINIO_BUCKET_QUOTA_GB:-}
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/init-minio.sh"]
+    networks:
+      - internal
+
+  # ── Label Studio ────────────────────────────────────────────
+  label-studio:
+    image: "heartexlabs/label-studio:latest"
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      pg-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    user: "1001:1001"
+    environment:
+      # Database
+      - DJANGO_DB=default
+      - POSTGRE_HOST=pg-db
+      - POSTGRE_PORT=5432
+      - POSTGRE_NAME=${POSTGRES_DB:-labelstudio}
+      - POSTGRE_USER=${POSTGRES_USER:-labelstudio}
+      - POSTGRE_PASSWORD=${POSTGRES_PASSWORD}
+      # Redis (task queue + caching)
+      - REDIS_LOCATION=redis://:${REDIS_PASSWORD}@redis:6379/1
+      # Django
+      - SECRET_KEY=${LABEL_STUDIO_SECRET_KEY}
+      - LABEL_STUDIO_HOST=${LABEL_STUDIO_HOST}
+      # Cloudflare Tunnel forwards real IP/host via headers
+      - USE_X_FORWARDED_HOST=true
+      - USE_X_FORWARDED_PORT=true
+      # Label Studio reads CSRF_TRUSTED_ORIGINS (not DJANGO_CSRF_TRUSTED_ORIGINS)
+      # see label_studio/core/settings/base.py: get_env('CSRF_TRUSTED_ORIGINS', [])
+      - CSRF_TRUSTED_ORIGINS=${LABEL_STUDIO_HOST}
+      # Storage — disable SSRF protection for internal MinIO calls
+      - SSRF_PROTECTION_ENABLED=false
+      - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
+      - LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=${LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT:-/label-studio/data/file}
+      # Bulk upload — Django default (100) breaks large task imports
+      # Ref: HumanSignal/label-studio#6777
+      - DATA_UPLOAD_MAX_NUMBER_FILES=100000
+      # Structured JSON logs (undocumented in guide but honoured by LS source)
+      - JSON_LOG=1
+      # Bootstrap a deterministic legacy API token on first boot.
+      # NOTE: only takes effect on FIRST startup against an empty Postgres DB.
+      - LABEL_STUDIO_USER_TOKEN=${LABEL_STUDIO_USER_TOKEN}
+      - LABEL_STUDIO_ENABLE_LEGACY_API_TOKEN=true
+      # Security
+      - LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=${LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK:-true}
+      # Initial admin (only used on first run against an empty DB).
+      # get_env('USERNAME') → tries LABEL_STUDIO_USERNAME first (see core/utils/params.py)
+      - LABEL_STUDIO_USERNAME=${LABEL_STUDIO_USERNAME}
+      - LABEL_STUDIO_PASSWORD=${LABEL_STUDIO_PASSWORD}
+      # Logging
+      - DJANGO_LOG_LEVEL=WARNING
+      - LOG_LEVEL=WARNING
+    volumes:
+      - ./ls-data:/label-studio/data:rw
+      - ./ls-data/file:/label-studio/data/file:rw
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - internal
+
+  # ── Nginx (reverse proxy) ───────────────────────────────────
+  nginx:
+    image: "nginx:${NGINX_VERSION:-1.28.3-alpine3.23}"
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      label-studio:
+        condition: service_healthy
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ls-data:/label-studio/data:rw
+      - ./ls-data/file:/label-studio/data/file:rw
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t && curl -sf http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - internal
+
+  # ── Cloudflare Tunnel ────────────────────────────────────────
+  # Routes configured in CF Zero Trust dashboard:
+  #   label-studio.example.com → http://nginx:80
+  #   minio.example.com        → http://minio:9000
+  cloudflared:
+    image: "cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.3.0}"
+    restart: unless-stopped
+    logging: *default-logging
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      nginx:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
