@@ -1,5 +1,13 @@
 # SAM2.1 ML 後端
 
+> 讀者對象：ML 開發者、進階標註流程設計者
+>
+> 本文件涵蓋：SAM2.1 架構、推論流程、模型選擇、限制與測試
+>
+> 本文件不涵蓋：核心服務部署與一般操作（請見 [user-guide.md](user-guide.md) 與 [RUNBOOK.md](RUNBOOK.md)）
+>
+> 快速任務路徑： [cookbook/user-cookbook.md](cookbook/user-cookbook.md#任務-4啟用-sam-後端預標註) / [cookbook/developer-cookbook.md](cookbook/developer-cookbook.md)
+
 SAM2.1（Segment Anything Model 2.1）是 Meta 釋出的分割模型，支援靜態影像分割（Image）與影片物件追蹤（Video）。本專案以兩個獨立 ML 後端服務的形式整合進 Label Studio：
 
 | 服務 | 路徑 | 監聽埠 | 功能 |
@@ -64,20 +72,20 @@ MODEL_CHECKPOINT=/data/models/my_custom.pt
 make ml-up                # 建置映像 + 以 ML Compose overlay 啟動（含核心服務）
 make ml-down              # 停止所有服務
 
-make build-sam21-image    # 僅建置影像後端映像（model.py 變更需 rebuild）
+make build-sam21-image    # 僅建置影像後端映像（Dockerfile/requirements 變更時）
 make build-sam21-video    # 僅建置影片後端映像
 
 make up-sam21-image       # 單獨啟動影像後端（假設 label-studio 已運行，--no-deps）
 make up-sam21-video       # 單獨啟動影片後端
 
-make restart-sam21-image  # 重啟影像後端（config/env 變更）
-make restart-sam21-video  # 重啟影片後端
+make restart-sam21-image  # 重啟影像後端（model.py 或 config/env 變更）
+make restart-sam21-video  # 重啟影片後端（model.py 或 config/env 變更）
 
 make test-sam21-image     # 在容器內執行影像後端 pytest
 make test-sam21-video     # 在容器內執行影片後端 pytest
 ```
 
-> **注意**：`/app/model.py` 打包在 image 內（非 bind mount），程式碼變更需執行 `build-sam21-*` 後再 `up-sam21-*`。
+> **注意**：`docker-compose.ml.yml` 已將 `./ml-backends/sam21-*/model.py` 掛載到容器 `/app/model.py`。只改 `model.py` 時通常只需 `restart-sam21-*`；僅在 Dockerfile、requirements 或其他映像層變更時才需要 `build-sam21-*`。
 
 首次 build 下載所有 4 個 checkpoint（合計約 700 MB）。健康檢查 `start_period: 300s`，下載期間不觸發重啟。
 
@@ -169,8 +177,6 @@ Settings → Labeling Interface → Code → 貼上 XML
 | `<TextArea name="scores">` | 追蹤資訊 | 由 ML backend 自動填入：模型名稱 + 逐畫格 obj/mask info |
 
 > 影片幾何提示若缺少 label，後端會先從 labeling config 動態選預設 label（優先非 `Exclude`）；僅在未顯式傳入預設值的舊呼叫路徑，才維持 `Object` 相容 fallback。
-
-> **VideoRectangle `smart="true"` 不會自動觸發推論**：Label Studio 的即時 smart annotation 僅對影像工具（`RectangleLabels`、`KeyPointLabels`、`BrushLabels`）有效；`VideoRectangle` 畫框後需手動點擊 `run_trigger` TextArea 的 **Submit** 按鈕才會呼叫後端。
 >
 > `KeyPointLabels` 已從影片後端移除：Label Studio 的 `KeyPointLabels` 僅支援 `Image` tag，不支援 `Video`；影片模式的點提示目前無對應 tag。
 
@@ -208,7 +214,7 @@ Label Studio（渲染多畫格追蹤框）
 | 追蹤長度 | 最多 `MAX_FRAMES_TO_TRACK` 畫格（預設 10），從最後一個提示畫格起算 |
 | 解析度縮放 | 長邊超過 `MAX_FRAME_LONG_SIDE`（預設 1024）自動縮小，避免 OOM |
 | 文字提示 | SAM2.1 不支援 PCS，TextArea 配置已移除 text_prompt |
-| VideoRectangle 自動觸發 | `smart="true"` 對影片工具無效；需點擊 `run_trigger` Submit 按鈕（仿 sam3-video 作法） |
+| VideoRectangle 自動觸發 | `smart="true"` 上傳框選 BBox；需點擊 `run_trigger` Submit 按鈕（仿 sam3-video 作法） |
 | Batch mode | 已移除 `_get_latest_annotation_result` 批次回退路徑；僅支援互動模式（context 必須含結果） |
 | gunicorn `--preload` | **禁止使用** |
 
@@ -236,13 +242,13 @@ Label Studio（渲染多畫格追蹤框）
 
 新版 `label_studio_ml` 的 `CACHE.__setitem__` 要求 value 必須為字串，但舊版程式碼呼叫 `set_extra_params({"predict_only": True})`（傳入 dict）導致 `ValidationError`，後端無法通過 `/health` 檢查。
 
-**修正**：移除 `setup()` 內的 `set_extra_params` 呼叫。SAM2.1 未實作 `fit()`，`predict_only` hint 無功能作用。程式碼變更後需 `build-sam21-*` + `up-sam21-*` 重建映像。
+**修正**：移除 `setup()` 內的 `set_extra_params` 呼叫。SAM2.1 未實作 `fit()`，`predict_only` hint 無功能作用。若只改 `model.py`，重啟對應後端即可套用；若涉及映像層檔案，才需 `build-sam21-*` + `up-sam21-*`。
 
 ### Brush mask 不顯示（RLE 值域問題）
 
 `label_studio_converter.brush.mask2rle` 期望輸入值域為 `{0, 255}`。SAM2 回傳 bool mask，`astype(uint8)` 後值為 `{0, 1}`；部分版本的 converter 將值為 `1` 的像素判定為背景，導致 RLE 全空，前端無任何 mask 顯示。
 
-**修正**：`_mask_to_rle` 改為 `mask.astype(np.uint8) * 255` 再傳入 `mask2rle`，與 sam3-image 慣例一致。程式碼變更後需 `build-sam21-image` + `up-sam21-image`。
+**修正**：`_mask_to_rle` 改為 `mask.astype(np.uint8) * 255` 再傳入 `mask2rle`，與 sam3-image 慣例一致。若只改 `model.py`，重啟 `sam21-image-backend` 即可套用；若有映像層變更才需 rebuild。
 
 ### 影像後端僅回傳最高分 mask
 

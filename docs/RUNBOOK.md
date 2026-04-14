@@ -2,6 +2,14 @@
 
 Operations reference for the Label Studio production stack.
 
+> Audience: operators and SREs
+>
+> Covers: health checks, deployment, upgrades, rollback, backup and incident handling
+>
+> Does not cover: user onboarding or full variable definitions (see [README.md](README.md) and [configuration.md](configuration.md))
+>
+> Task-first recipes: [cookbook/ops-cookbook.md](cookbook/ops-cookbook.md)
+
 ## Health Checks
 
 ```bash

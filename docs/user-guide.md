@@ -1,7 +1,12 @@
 # Label Studio 使用者操作與設定指南
 
-> **定位**: 本文件說明部署前後需要設定什麼、哪些地方容易出錯，以及如何確認系統正常運作。
-> 詳細環境變數說明見 [configuration.md](configuration.md)，運維操作見 [RUNBOOK.md](RUNBOOK.md)。
+> 讀者對象：使用者、專案管理者、初次部署者
+>
+> 本文件涵蓋：部署流程、常見設定、防呆清單、使用者管理
+>
+> 本文件不涵蓋：完整環境變數細節（請見 [configuration.md](configuration.md)）與進階維運排障（請見 [RUNBOOK.md](RUNBOOK.md)）
+>
+> 快速任務路徑： [README](README.md) → [cookbook/user-cookbook.md](cookbook/user-cookbook.md)
 
 ---
 
@@ -255,7 +260,7 @@ make reset-password
 
 ### 使用者管理（社區版限制）
 
-Label Studio **社區版不提供 UI 使用者管理功能**，Organization 頁面的成員管理（邀請、移除、角色設定）屬於 Enterprise 功能。Django Admin UI（`/django-admin/`）在社區版映像中也無法正常啟用。
+Label Studio **社區版不提供 UI 使用者管理功能**，Organization 頁面的成員管理（如移除、角色設定）屬於 Enterprise 功能。
 
 社區版的使用者管理透過 **Django shell CLI** 操作。
 
@@ -277,7 +282,7 @@ print(f'Created: {u.email}')
 "
 ```
 
-> 可在 Label Studio UI 中產生要請連結。
+> 也可在 Label Studio UI 中產生邀請連結。
 
 #### 刪除使用者
 

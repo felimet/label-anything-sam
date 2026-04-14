@@ -1,5 +1,13 @@
 # SAM3 ML 後端
 
+> 讀者對象：ML 開發者、進階標註流程設計者
+>
+> 本文件涵蓋：SAM3 架構、推論流程、GPU 相容性、限制與測試
+>
+> 本文件不涵蓋：核心服務部署與一般操作（請見 [user-guide.md](user-guide.md) 與 [RUNBOOK.md](RUNBOOK.md)）
+>
+> 快速任務路徑： [cookbook/user-cookbook.md](cookbook/user-cookbook.md#任務-4啟用-sam-後端預標註) / [cookbook/developer-cookbook.md](cookbook/developer-cookbook.md)
+
 SAM3（Segment Anything Model 3）是 Meta 於 2025 年 11 月釋出的下一代分割模型，支援影像分割（Image）與影片物件追蹤（Video），並新增 **PCS（Promptable Concept Segmentation）**——純文字自然語言驅動的分割能力。本專案以兩個獨立 ML 後端服務的形式整合進 Label Studio：
 
 | 服務 | 路徑 | 監聽埠 | 功能 |

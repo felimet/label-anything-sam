@@ -1,5 +1,13 @@
 # Contributing Guide
 
+> Audience: developers and contributors
+>
+> Covers: local setup, testing workflow, commit and PR expectations
+>
+> Fast task recipes: [cookbook/developer-cookbook.md](cookbook/developer-cookbook.md)
+>
+> Full docs map: [README.md](README.md)
+
 ## Prerequisites
 
 | Tool | Min version | Notes |

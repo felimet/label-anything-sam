@@ -6,6 +6,9 @@
 .env
 .env.ml
 
+# Documentation
+ONBOARDING.md
+
 # Runtime data volumes
 data/
 label-studio-data/

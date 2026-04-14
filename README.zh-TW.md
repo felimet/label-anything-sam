@@ -1,96 +1,85 @@
 # label-anything-sam
 
-[Label Studio](https://labelstud.io) SAM3/3.1 完整部署方案：PostgreSQL · Redis · MinIO (S3) · Nginx · Cloudflare Tunnel · SAM3/3.1 互動式影像分割。
+適用於生產環境的 Label Studio 部署方案，內含可選用的 SAM3 與 SAM2.1 ML 後端。
 
-> 截至 2026 年 4 月 11 日 [Label Studio ml-backend](https://github.com/HumanSignal/label-studio-ml-backend) 尚未更新加入 [Meta (Facebook) SAM 3: Segment Anything with Concepts](https://github.com/facebookresearch/sam3) 後端分割模型，故在本 repo 中提供基於 SAM 3 的 Label Studio ML Backend 自訂實作，供有需求的使用者直接整合。並盡可能的符合 [Label Studio ml-backend](https://github.com/HumanSignal/label-studio-ml-backend) 資料夾結構，詳見 `./ml-backends`。
+English version: [README.md](README.md)
 
-> **English documentation** → [README.md](README.md)
+## 為何有這個專案
 
-## 服務架構
+截至 2026-04，上游 [Label Studio ML backend](https://github.com/HumanSignal/label-studio-ml-backend) 尚未提供可直接用於生產部署的 SAM3 整合路徑。本專案提供可落地的完整堆疊：
 
-| 服務 | 映像 | 用途 | 資料儲存說明連結  |
-|------|------|------|----------|
-| `label-studio` | `heartexlabs/label-studio:latest` | 標注 UI + API | [`./ls-data/`](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) — 匯出檔、local files |
-| `pg-db` | `postgres:17` | 資料庫 | [`./postgres-data/`](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) — 任務、標注結果、使用者 |
-| `redis` | `redis:8.6.2` | 任務佇列 / 快取 | [`./redis-data/`](docs/configuration.md#資料目錄說明) — 暫存佇列狀態 |
-| `minio` | `firstfinger/minio:latest` | S3 相容物件儲存 + 完整 Admin UI（port 9002） | [`./minio-data/`](docs/configuration.md#minio) — 媒體檔案 |
-| `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | 一次性 bucket 初始化 + service account + quota | — |
-| `nginx` | `nginx:1.28.3-alpine3.23` | 反向代理 | — |
-| `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust Tunnel | — |
-| `sam3-image-backend` | (自訂建置) | SAM3 影像分割 → BrushLabels *(需 GPU，可選)* | `hf-cache`（共用 volume）— 模型權重 |
-| `sam3-video-backend` | (自訂建置) | SAM3 影片物件追蹤 → VideoRectangle *(需 GPU，可選)* | `hf-cache`（共用 volume）— 模型權重 |
+- 核心服務：Label Studio + PostgreSQL + Redis + MinIO + Nginx + Cloudflare Tunnel
+- 可選 GPU 疊加：SAM3 影像/影片後端與 SAM2.1 影像/影片後端
+- 以安全為先的預設：S3 最小權限、Token 使用規範、對外暴露邊界
 
-> **MinIO CE 說明**：MinIO 於 2025-05-24 從社群版移除全部 Admin UI，並於 2025-09-07 後停止推送 CE Docker image。本 stack 改用 `firstfinger/minio`——每日從上游原始碼自動建置並恢復完整 Admin Console（port 9001 Console、port 9002 Full Admin UI）。參考：[Harsh-2002/MinIO](https://github.com/Harsh-2002/MinIO)
-
-## 前置需求
-
-- Docker Engine ≥ 26 + Docker Compose v2
-- NVIDIA GPU + `nvidia-container-toolkit`（僅 SAM3 後端需要）
-- Cloudflare 帳號，已開啟 Zero Trust
-- HuggingFace 帳號，已同意 Meta `facebook/sam3.1` 使用條款
-
-## 快速開始
+## 5 分鐘快速開始
 
 ```bash
 git clone https://github.com/felimet/label-anything-sam
 cd label-anything-sam
 
-# 1. 核心服務
+# 1) 核心服務
 cp .env.example .env
-$EDITOR .env           # 填入所有 <PLACEHOLDER> 值
-                       # LABEL_STUDIO_USER_TOKEN: openssl rand -hex 20（必須 ≤40 字元）
+# 填入所有 <PLACEHOLDER>
+# LABEL_STUDIO_USER_TOKEN 必須 <= 40 字元（建議：openssl rand -hex 20）
 
-make up                # 啟動核心服務（管理員帳號於首次啟動時自動建立）
-make init-minio        # 建立 S3 儲存桶 + 存取政策
+make up
+make init-minio
 
-# 2. 取得 Label Studio API Token（SAM3 後端需要）
-#    登入 → 右上角頭像 → Account & Settings → Legacy Token → 複製
-#    ⚠ 必須使用 Legacy Token（不可用 Personal Access Token）——ML SDK 傳送
-#      "Authorization: Token <key>"；PAT 使用 JWT Bearer → 401 Unauthorized。
-
-# 3. SAM3 ML 後端（可選，需 NVIDIA GPU）
+# 2) 可選 ML 後端（需 GPU）
 cp .env.ml.example .env.ml
-$EDITOR .env.ml        # 填入 LABEL_STUDIO_API_KEY（步驟 2）及 HF_TOKEN
+# 設定 LABEL_STUDIO_API_KEY（Legacy Token）與 HF_TOKEN
 
 make ml-up
 ```
 
-在 Label Studio 中連接 MinIO 儲存：
-**專案 → Settings → Cloud Storage → Add Source Storage → S3**
-（endpoint: `http://minio:9000`，使用 `MINIO_LS_ACCESS_ID` / `MINIO_LS_SECRET_KEY`——由 `make init-minio` 建立的最小權限 service account。**請勿**填入 root 帳密）
+開啟：
 
-> **⚠️ 首次部署後：** 立即輪換 service account 密碼。
-> Admin UI（`http://localhost:19002`）→ 右上角頭像 → **Access Keys → Change Password**
-> 同步更新 `.env` 的 `MINIO_LS_SECRET_KEY` 與 LS Cloud Storage 設定。
+- Label Studio：`http://localhost:18090`
+- MinIO Console：`http://localhost:19001`
+- MinIO Full Admin UI：`http://localhost:19002`
 
-## Makefile 指令
+檢查服務健康：
 
-> **需先安裝 `make`** — 安裝方式：
-> - **Windows**：`winget install GnuWin32.Make`，完成後將 `C:\Program Files (x86)\GnuWin32\bin` 加入 `PATH`（系統內容 → 進階 → 環境變數 → Path → 新增）
-> - **macOS**：`brew install make`
-> - **Linux**：`apt install make`
+```bash
+make health
+```
 
-| 指令 | 說明 |
-|------|------|
-| `up / down / restart / logs / ps` | 核心服務生命週期管理 |
-| `ml-up / ml-down` | SAM3 ML 疊加層（影像 + 影片） |
-| `build-sam3-image / build-sam3-video` | 建置 ML 後端映像 |
-| `test-sam3-image / test-sam3-video` | 在容器內執行 pytest |
-| `init-minio` | 一次性儲存桶初始化 |
-| `create-admin` | 建立管理員帳號 |
-| `health` | 檢查所有服務狀態 |
-| `push` | git add + commit + push |
+## 開始前請先注意
 
-## 文件
+- ML 後端必須使用 **Legacy Token**，不可使用 Personal Access Token。
+- Label Studio 連 S3 請用 `MINIO_LS_ACCESS_ID` / `MINIO_LS_SECRET_KEY`，不要使用 root 帳密。
+- 首次部署完成後，請立即輪換 MinIO service account 密碼。
+- 變更 `.env` 後請用 `down` + `up` 重建容器，不要只做 `restart`。
 
-| 文件 | 內容 |
-|------|------|
-| [docs/user-guide.md](docs/user-guide.md) | 簡易：使用者操作指南 · 部署流程 · 管理員與使用者管理 |
-| [docs/configuration.md](docs/configuration.md) | `.env` 環境變數說明 · [MinIO 存取政策](docs/configuration.md#minio-bucket-access-policy) · [Bucket 加密](docs/configuration.md#bucket-encryptionsse-s3--sse-kms) · [pg-db vs ls-data](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) |
-| [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust 設定 + WAF 規則 + 快速部署替代方案 ngrok  |
-| [docs/sam3-backend.md](docs/sam3-backend.md) | SAM3 模型設定 + 標注流程 |
-| [docs/architecture.md](docs/architecture.md) | 服務拓撲、Volume、網路 |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md) | 營運指南（健康檢查、升級、排除故障） |
+## 依角色閱讀
+
+| 角色 | 起點 | Cookbook | 深入文件 |
+|------|------|----------|----------|
+| 使用者 / 專案管理者 | [docs/README.md](docs/README.md) | [docs/cookbook/user-cookbook.md](docs/cookbook/user-cookbook.md) | [docs/user-guide.md](docs/user-guide.md) |
+| 開發者 | [docs/README.md](docs/README.md) | [docs/cookbook/developer-cookbook.md](docs/cookbook/developer-cookbook.md) | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) |
+| 維運 / SRE | [docs/README.md](docs/README.md) | [docs/cookbook/ops-cookbook.md](docs/cookbook/ops-cookbook.md) | [docs/RUNBOOK.md](docs/RUNBOOK.md) |
+
+## 文件地圖
+
+- [docs/README.md](docs/README.md)：文件入口與閱讀路線
+- [docs/user-guide.md](docs/user-guide.md)：使用者流程與管理操作
+- [docs/configuration.md](docs/configuration.md)：環境變數單一真相來源
+- [docs/architecture.md](docs/architecture.md)：拓撲、資料流與安全設計
+- [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md)：對外暴露、Tunnel、WAF
+- [docs/sam3-backend.md](docs/sam3-backend.md)：SAM3 後端行為與限制
+- [docs/sam21-backend.md](docs/sam21-backend.md)：SAM2.1 後端行為與限制
+- [docs/RUNBOOK.md](docs/RUNBOOK.md)：維運、事故排除、備份與還原
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)：開發流程與貢獻規範
+
+## 常用 Make 指令（精簡）
+
+- `make up / down / restart / logs / ps`：核心服務生命週期
+- `make ml-up / ml-down`：核心服務 + ML 疊加層
+- `make build-sam3-image / build-sam3-video / build-sam21-image / build-sam21-video`：建置 ML 映像
+- `make test-sam3-image / test-sam3-video / test-sam21-image / test-sam21-video`：執行 ML 後端測試
+- `make init-minio`：首次建立 bucket 與 service account
+- `make health`：全棧健康檢查
 
 ## 授權
 

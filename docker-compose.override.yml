@@ -27,7 +27,7 @@ services:
 
   redis:
     ports:
-      - "6380:6379"   # Avoid conflict with local Redis
+      - "16380:6379"   # Avoid conflict with local Redis
 
   nginx:
     ports:

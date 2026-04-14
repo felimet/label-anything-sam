@@ -2,6 +2,14 @@
 
 本專案透過單一 `cloudflared` 容器對外暴露兩條路由。
 
+> 讀者對象：維運、網路管理者
+>
+> 本文件涵蓋：Tunnel 建立、Public Hostname、WAF 規則、替代方案
+>
+> 本文件不涵蓋：一般部署與應用排障（請見 [RUNBOOK.md](RUNBOOK.md)）
+>
+> 任務導覽入口： [README.md](README.md)
+
 ## 路由規劃
 
 | 公開網域 | 內部目標 | 存取控制 |

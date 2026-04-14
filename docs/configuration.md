@@ -2,6 +2,15 @@
 
 所有變數定義於 `.env`（從 `.env.example` 複製後填入）。
 
+> 讀者對象：部署者、維運、開發者
+>
+> 本文件是環境變數與儲存設定的單一真相來源（SSOT）。
+>
+> 任務型步驟請改看：
+> - 使用者： [cookbook/user-cookbook.md](cookbook/user-cookbook.md)
+> - 開發者： [cookbook/developer-cookbook.md](cookbook/developer-cookbook.md)
+> - 維運： [cookbook/ops-cookbook.md](cookbook/ops-cookbook.md)
+
 > **官方參考**：[Label Studio 部署指南](https://github.com/HumanSignal/label-studio/tree/4b222c5d63acd150277cc43d8326269ef567b595/docs/source/guide) — 環境變數、儲存後端、部署選項的原始說明文件。
 
 ## PostgreSQL

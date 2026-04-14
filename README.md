@@ -1,96 +1,85 @@
 # label-anything-sam
 
-[Label Studio](https://labelstud.io) SAM3/3.1 Full Deployment Setup: PostgreSQL · Redis · MinIO (S3) · Nginx · Cloudflare Tunnel · SAM3/3.1 Interactive Image Segmentation
+Production-ready Label Studio deployment stack with optional SAM3 and SAM2.1 ML backends.
 
-> As of April 11, 2026, [Label Studio ml-backend](https://github.com/HumanSignal/label-studio-ml-backend) has not yet been updated to include [Meta (Facebook) SAM 3: Segment Anything with Concepts](https://github.com/facebookresearch/sam3) as a backend segmentation model. This repo therefore provides a custom Label Studio ML Backend implementation based on SAM 3 for users who need direct integration, following the folder structure of [Label Studio ml-backend](https://github.com/HumanSignal/label-studio-ml-backend) as closely as possible. See `./ml-backends` for details.
+Traditional Chinese version: [README.zh-TW.md](README.zh-TW.md)
 
-> **繁體中文說明** → [README.zh-TW.md](README.zh-TW.md)
+## Why this repository exists
 
-## Stack
+As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSignal/label-studio-ml-backend) does not provide a maintained SAM3 integration path for production deployment. This repository provides a practical, deployment-focused stack:
 
-| Service | Image | Role | Data Explain Link |
-|---------|-------|------|------|
-| `label-studio` | `heartexlabs/label-studio:latest` | Labeling UI + API | [`./ls-data/`](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) — exports, local files |
-| `pg-db` | `postgres:17` | Metadata store | [`./postgres-data/`](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) — tasks, annotations, users |
-| `redis` | `redis:8.6.2` | Task queue / cache | [`./redis-data/`](docs/configuration.md#資料目錄說明) — transient queue state |
-| `minio` | `firstfinger/minio:latest` | S3-compatible object storage + full Admin UI (port 9002) | [`./minio-data/`](docs/configuration.md#minio) — media files |
-| `minio-init` | `minio/mc:RELEASE.2025-08-13T08-35-41Z` | One-shot bucket init + service account + quota | — |
-| `nginx` | `nginx:1.28.3-alpine3.23` | Reverse proxy | — |
-| `cloudflared` | `cloudflare/cloudflared:2026.3.0` | Zero Trust tunnel | — |
-| `sam3-image-backend` | (custom build) | SAM3 image segmentation → BrushLabels *(GPU, optional)* | `hf-cache` (shared volume) — model weights |
-| `sam3-video-backend` | (custom build) | SAM3 video object tracking → VideoRectangle *(GPU, optional)* | `hf-cache` (shared volume) — model weights |
+- Core services: Label Studio + PostgreSQL + Redis + MinIO + Nginx + Cloudflare Tunnel
+- Optional GPU overlays: SAM3 image/video backends and SAM2.1 image/video backends
+- Security-first defaults for S3 access, token usage, and network exposure
 
-> **MinIO CE note**: MinIO removed all Admin UI from Community Edition on 2025-05-24 and stopped pushing CE images to Docker Hub after 2025-09-07. This stack uses `firstfinger/minio` — a daily build from upstream source that restores the full Admin Console (ports 9001 Console, 9002 Full Admin UI). Ref: [Harsh-2002/MinIO](https://github.com/Harsh-2002/MinIO)
-
-## Prerequisites
-
-- Docker Engine ≥ 26 + Docker Compose v2
-- NVIDIA GPU + `nvidia-container-toolkit` (SAM3 backend only)
-- Cloudflare account with Zero Trust enabled
-- HuggingFace account — Meta `facebook/sam3.1` license accepted
-
-## Quick Start
+## 5-Minute Quick Start
 
 ```bash
 git clone https://github.com/felimet/label-anything-sam
 cd label-anything-sam
 
-# 1. Core stack
+# 1) Core stack
 cp .env.example .env
-$EDITOR .env           # fill every <PLACEHOLDER>
-                       # LABEL_STUDIO_USER_TOKEN: openssl rand -hex 20  (must be ≤40 chars)
+# Fill all <PLACEHOLDER> values
+# LABEL_STUDIO_USER_TOKEN must be <= 40 chars (use: openssl rand -hex 20)
 
-make up                # start core stack (admin account auto-created on first boot)
-make init-minio        # create S3 bucket + policies
+make up
+make init-minio
 
-# 2. Get the Label Studio API token (needed for SAM3 backends)
-#    Login → Avatar (top-right) → Account & Settings → Legacy Token → Copy
-#    ⚠ Must use Legacy Token (NOT Personal Access Token) — ML SDK sends
-#      "Authorization: Token <key>"; PAT uses JWT Bearer → 401 Unauthorized.
-
-# 3. SAM3 ML backends (optional, requires NVIDIA GPU)
+# 2) Optional ML backends (GPU)
 cp .env.ml.example .env.ml
-$EDITOR .env.ml        # set LABEL_STUDIO_API_KEY (from step 2) and HF_TOKEN
+# Set LABEL_STUDIO_API_KEY (Legacy Token) and HF_TOKEN
 
 make ml-up
 ```
 
-Connect MinIO storage in Label Studio:
-**Project → Settings → Cloud Storage → Add Source Storage → S3**
-(endpoint: `http://minio:9000`, use `MINIO_LS_ACCESS_ID` / `MINIO_LS_SECRET_KEY` — the least-privilege service account created by `make init-minio`. Do **not** use root credentials here).
+Open:
 
-> **⚠️ After first deployment:** rotate the service account secret immediately.
-> Admin UI (`http://localhost:19002`) → top-right avatar → **Access Keys → Change Password**
-> Update `MINIO_LS_SECRET_KEY` in `.env` and in the LS Cloud Storage settings.
+- Label Studio: `http://localhost:18090`
+- MinIO Console: `http://localhost:19001`
+- MinIO Full Admin UI: `http://localhost:19002`
 
-## Makefile Reference
+Verify stack health:
 
-> **`make` required** — Install if missing:
-> - **Windows**: `winget install GnuWin32.Make` then add `C:\Program Files (x86)\GnuWin32\bin` to `PATH` (System Properties → Environment Variables → Path → New)
-> - **macOS**: `brew install make`
-> - **Linux**: `apt install make`
+```bash
+make health
+```
 
-| Target | Description |
-|--------|-------------|
-| `up / down / restart / logs / ps` | Core stack lifecycle |
-| `ml-up / ml-down` | SAM3 ML overlay (image + video) |
-| `build-sam3-image / build-sam3-video` | Build ML backend images |
-| `test-sam3-image / test-sam3-video` | Run pytest in containers |
-| `init-minio` | One-time bucket initialisation |
-| `create-admin` | Create superuser |
-| `health` | Check all services |
-| `push` | git add + commit + push |
+## Critical Notes Before You Continue
 
-## Documentation
+- Use **Legacy Token** for ML backends, not Personal Access Token.
+- Use `MINIO_LS_ACCESS_ID` / `MINIO_LS_SECRET_KEY` for Label Studio S3 storage, never root credentials.
+- Rotate MinIO service-account credentials immediately after first deployment.
+- If changing `.env`, recreate containers (`down` + `up`) instead of only `restart`.
 
-| Guide | Contents |
-|-------|----------|
-| [docs/user-guide.md](docs/user-guide.md) | User-facing setup guide · deployment flow · admin & user management |
-| [docs/configuration.md](docs/configuration.md) | `.env` variable reference · [MinIO Access Policy](docs/configuration.md#minio-bucket-access-policy) · [Bucket Encryption](docs/configuration.md#bucket-encryptionsse-s3--sse-kms) · [pg-db vs ls-data](docs/configuration.md#pg-db-vs-ls-data--資料分層說明) |
-| [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md) | Zero Trust setup + WAF rules + alternatives (ngrok) |
-| [docs/sam3-backend.md](docs/sam3-backend.md) | SAM3 model setup + annotation workflow |
-| [docs/architecture.md](docs/architecture.md) | Service topology, volumes, networking |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operations guide (health checks, upgrades, troubleshooting) |
+## Start Here By Role
+
+| Role | Start Here | Cookbook | Deep Dive |
+|------|------------|----------|-----------|
+| End User / Project Admin | [docs/README.md](docs/README.md) | [docs/cookbook/user-cookbook.md](docs/cookbook/user-cookbook.md) | [docs/user-guide.md](docs/user-guide.md) |
+| Developer | [docs/README.md](docs/README.md) | [docs/cookbook/developer-cookbook.md](docs/cookbook/developer-cookbook.md) | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) |
+| Operator / SRE | [docs/README.md](docs/README.md) | [docs/cookbook/ops-cookbook.md](docs/cookbook/ops-cookbook.md) | [docs/RUNBOOK.md](docs/RUNBOOK.md) |
+
+## Documentation Map
+
+- [docs/README.md](docs/README.md): Documentation hub and reading paths
+- [docs/user-guide.md](docs/user-guide.md): User workflows and admin operations
+- [docs/configuration.md](docs/configuration.md): Single source of truth for environment variables
+- [docs/architecture.md](docs/architecture.md): Topology, data flow, and security design
+- [docs/cloudflare-tunnel.md](docs/cloudflare-tunnel.md): Public exposure, tunnel, and WAF setup
+- [docs/sam3-backend.md](docs/sam3-backend.md): SAM3 backend behavior and constraints
+- [docs/sam21-backend.md](docs/sam21-backend.md): SAM2.1 backend behavior and constraints
+- [docs/RUNBOOK.md](docs/RUNBOOK.md): Operations, incident response, backup and restore
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md): Development workflow and contribution policy
+
+## Make Targets (Short List)
+
+- `make up / down / restart / logs / ps`: Core stack lifecycle
+- `make ml-up / ml-down`: Core stack with ML overlays
+- `make build-sam3-image / build-sam3-video / build-sam21-image / build-sam21-video`: Build ML images
+- `make test-sam3-image / test-sam3-video / test-sam21-image / test-sam21-video`: Run ML backend tests
+- `make init-minio`: One-time bucket and service-account initialization
+- `make health`: End-to-end health checks
 
 ## License
 
