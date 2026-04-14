@@ -64,6 +64,15 @@ docker compose up -d --no-deps cloudflared
 make health
 ```
 
+> ⚠️ **PostgreSQL major version 變更不可直接沿用舊資料目錄。**
+>
+> 若 `POSTGRES_VERSION` 發生 major 變動（例如 `17` → `15.17`），不可直接重用既有 `./postgres-data`。請先做 SQL 備份，再以新版本重建資料庫並還原：
+>
+> 1. `docker compose exec pg-db pg_dump -U labelstudio labelstudio > backup.sql`
+> 2. 停止 stack，清空或替換 `./postgres-data`
+> 3. 以新版本啟動 `pg-db`
+> 4. `docker compose exec -T pg-db psql -U labelstudio labelstudio < backup.sql`
+
 ### Start ML backends (GPU)
 
 ```bash
@@ -110,9 +119,9 @@ docker compose up -d --no-deps label-studio
 
 ```bash
 docker compose stop label-studio
-docker compose exec db psql -U labelstudio -c "DROP DATABASE labelstudio;"
-docker compose exec db psql -U labelstudio -c "CREATE DATABASE labelstudio;"
-docker compose exec -T db psql -U labelstudio labelstudio < backup.sql
+docker compose exec pg-db psql -U labelstudio -c "DROP DATABASE labelstudio;"
+docker compose exec pg-db psql -U labelstudio -c "CREATE DATABASE labelstudio;"
+docker compose exec -T pg-db psql -U labelstudio labelstudio < backup.sql
 docker compose start label-studio
 ```
 
@@ -122,18 +131,18 @@ docker compose start label-studio
 
 ```bash
 # Check postgres health
-docker compose exec db pg_isready -U labelstudio
+docker compose exec pg-db pg_isready -U labelstudio
 
 # Inspect init log
-docker compose logs db | grep -i error
+docker compose logs pg-db | grep -i error
 ```
 
 If the database was never created, re-run init:
 ```bash
 docker compose down
 docker volume rm label-studio_postgres-data   # ⚠️ deletes all data
-docker compose up -d db
-docker compose logs -f db  # wait for "database system is ready"
+docker compose up -d pg-db
+docker compose logs -f pg-db  # wait for "database system is ready"
 ```
 
 ### Label Studio 登入 403 CSRF verification failed
@@ -465,7 +474,7 @@ Label Studio typically takes 60–90 s to start on first boot.
 ```bash
 make logs                                     # all services, last 100 lines
 docker compose logs -f label-studio           # LS only
-docker compose logs -f db redis               # infra only
+docker compose logs -f pg-db redis            # infra only
 
 # SAM3 backends
 docker compose -f docker-compose.yml -f docker-compose.ml.yml \
@@ -493,7 +502,7 @@ docker compose logs label-studio 2>&1 | jq 'select(.level=="ERROR")'
 tar -czf ls-data-$(date +%Y%m%d).tar.gz ./ls-data/
 
 # PostgreSQL — 必須用 pg_dump（postgres-data/ 是內部格式，直接複製無法還原）
-docker compose exec db pg_dump -U labelstudio labelstudio \
+docker compose exec pg-db pg_dump -U labelstudio labelstudio \
   > backup-$(date +%Y%m%d).sql
 
 # MinIO 媒體檔案

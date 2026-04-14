@@ -82,7 +82,7 @@ make health
 ### 建議備份
 ```bash
 # PostgreSQL（建議每日）
-docker compose exec db pg_dump -U labelstudio labelstudio > backup-$(date +%Y%m%d).sql
+docker compose exec pg-db pg_dump -U labelstudio labelstudio > backup-$(date +%Y%m%d).sql
 
 # Label Studio 檔案資料
 tar -czf ls-data-$(date +%Y%m%d).tar.gz ./ls-data/
