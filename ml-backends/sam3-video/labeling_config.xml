@@ -1,0 +1,119 @@
+<!--
+  SAM3 Video Segmentation — Label Studio Labeling Config
+  ======================================================
+  推理模式（由幾何操作觸發）:
+    Box-only  : 只框選 → SAM3 video 追蹤
+    Text+Box  : 文字 Submit → 再框選 → SAM3 PCS mixed mode
+    Point-only: 只點選（Keypoint，若支援）→ SAM2 fallback 追蹤
+
+  注意：文字 Submit 本身不觸發推理，只暫存文字供下一次幾何操作使用。
+
+  Output:
+    VideoRectangle: SAM3 向前追蹤的逐格 bounding box
+    scores        : 每次推理後的 add_prompt 回應（由 ML backend 自動填入）
+
+  樣式說明：
+    <Style> 內的配色以暗黑模式（dark background）為基準設計。
+    若使用明亮模式，請自行修改 <Style> 內的顏色值（background、color、border 等）。
+-->
+<View>
+  <Style>
+    .sam3-section {
+      background: #2a2a2a;
+      border: 1px solid #3d3d3d;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+    }
+    .sam3-label span {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px dashed #555;
+      cursor: help;
+      position: relative;
+    }
+    .sam3-label span[title]:hover::after {
+      content: attr(title);
+      position: absolute;
+      left: 0;
+      top: calc(100% + 4px);
+      background: #1e1e1e;
+      color: #ccc;
+      padding: 8px 10px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      font-size: 11px;
+      font-weight: normal;
+      text-transform: none;
+      letter-spacing: 0;
+      white-space: pre-line;
+      text-align: left;
+      width: 280px;
+      z-index: 9999;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      pointer-events: none;
+    }
+    .sam3-scores textarea {
+      font-family: monospace;
+      font-size: 11px;
+      color: #aaa;
+      background: #1a1a1a;
+    }
+    /* Loading indicator while SAM3 is running */
+    .lsf-main-content.lsf-requesting .sam3-hint span::after {
+      content: " ⏳ Running SAM3…";
+      color: #666;
+      font-size: 11px;
+      font-style: italic;
+      text-transform: none;
+      border-bottom: none;
+    }
+  </Style>
+
+  <Video name="video" value="$video" framerate="25.0"/>
+
+  <!-- Optional: text prompt (Submit 暫存文字，不立即觸發推理) -->
+  <View className="sam3-section">
+    <HyperText name="h_text" value="" className="sam3-label sam3-hint" inline="true">
+      <span title="輸入概念文字後按 Submit，立即觸發推理。&#10;&#10;純文字 → SAM3 全圖偵測並向前追蹤所有符合描述的 instance。&#10;文字 + Box Prompt → Text+Geo mixed mode（更精確定位）。&#10;不輸入文字直接框選 → 純幾何模式（SAM3 video）。">Text Prompt (optional)</span>
+    </HyperText>
+    <TextArea name="text_prompt" toName="video"
+              placeholder="e.g. car, person, tree"
+              perRegion="false" rows="1"
+              maxSubmissions="1" showSubmitButton="true" editable="true"/>
+  </View>
+
+  <!-- Prompt: bounding box on target frame → SAM3 tracks forward -->
+  <View className="sam3-section">
+    <HyperText name="h_box" value="" className="sam3-label" inline="true">
+      <span title="1. 點選工具列的 auto（⚡）圖示啟用 smart 模式。&#10;2. 選 Object（正向追蹤）或 Exclude（負向，排除此區域）。&#10;3. 在目標畫格拖拉矩形框住物件，SAM3 自動向前追蹤。&#10;&#10;搭配 Text Prompt → Text+Geo mixed mode（SAM3 PCS）。&#10;只用 Object 單框（無文字）→ SAM3 純幾何追蹤。">Box Prompt</span>
+    </HyperText>
+    <VideoRectangle name="box" toName="video" smart="true"/>
+  </View>
+
+  <!-- Track labels: Object (positive) or Exclude (negative box) -->
+  <View className="sam3-section">
+    <HyperText name="h_labels" value="" className="sam3-label" inline="true">
+      <span title="為追蹤的物件貼上語意標籤。&#10;&#10;blank   → 不選標籤，等同 Object（預設正向追蹤）&#10;Object  → 正向框（告訴模型要追蹤這個區域）&#10;Exclude → 負向框（告訴模型排除此區域，不追蹤）&#10;&#10;框選後從此處選取標籤；不選也可直接送出。">Track Labels</span>
+    </HyperText>
+    <Labels name="videoLabels" toName="video" allowEmpty="true">
+      <Label value="Object"  background="#11A39E"/>
+      <Label value="Exclude" background="#FF4D4F"/>
+    </Labels>
+  </View>
+
+  <!-- Inference scores: filled by ML backend after each prediction -->
+  <View className="sam3-section sam3-scores">
+    <HyperText name="h_scores" value="" className="sam3-label" inline="true">
+      <span title="每次推理後，ML backend 自動填入 add_prompt 的回應資訊。&#10;&#10;包含畫格索引、物件 ID 及模型回傳的候選資訊。&#10;分數越高代表模型對該追蹤目標的信心越強。">Inference Scores</span>
+    </HyperText>
+    <TextArea name="scores" toName="video"
+              placeholder="Scores appear here after prediction…"
+              perRegion="false" rows="3"
+              maxSubmissions="1" showSubmitButton="false" editable="false"/>
+  </View>
+
+</View>
