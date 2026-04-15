@@ -2,7 +2,7 @@ name: label-anything-sam
 
 # ============================================================
 # Label Studio — Full Stack
-# Services: PostgreSQL · Redis · MinIO · Label Studio · Nginx
+# Services: Supabase DB/Pooler · Redis · MinIO · Label Studio · Nginx
 # Cloudflare Tunnel routes:
 #   label-studio.example.com → nginx:80 → label-studio:8080
 #   minio-api.example.com     → minio:9000 (GET/HEAD WAF rule on CF)
@@ -25,28 +25,6 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-  # ── PostgreSQL ──────────────────────────────────────────────
-  pg-db:
-    # v1.1.0 direct lane: run core DB on Supabase Postgres runtime.
-    image: "${PG_DB_IMAGE:-supabase/postgres:15.14.1.107}"
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-labelstudio}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB:-labelstudio}
-    volumes:
-      - ./postgres-data:/var/lib/postgresql/data
-      - ./postgres/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-labelstudio} -d ${POSTGRES_DB:-labelstudio}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - internal
-
   # ── Redis ───────────────────────────────────────────────────
   redis:
     image: "redis:${REDIS_VERSION:-8.6.2}"

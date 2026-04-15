@@ -387,7 +387,9 @@ services:
       DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
       STORAGE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL}
       REQUEST_ALLOW_X_FORWARDED_PATH: "true"
-      FILE_SIZE_LIMIT: 52428800
+      FILE_SIZE_LIMIT: ${FILE_SIZE_LIMIT:-52428800}
+      IMGPROXY_ENABLE_WEBP_DETECTION: ${IMGPROXY_ENABLE_WEBP_DETECTION:-false}
+      ENABLE_IMAGE_TRANSFORMATION: ${ENABLE_IMAGE_TRANSFORMATION:-true}
       # MinIO-backed S3 storage (adapted from supabase/docker-compose.s3.yml)
       STORAGE_BACKEND: ${SUPABASE_STORAGE_BACKEND:-s3}
       # S3 bucket when using S3 backend, directory name when using 'file'
@@ -402,7 +404,6 @@ services:
       TENANT_ID: ${STORAGE_TENANT_ID}
       # TODO: https://github.com/supabase/storage-api/issues/55
       REGION: ${SUPABASE_STORAGE_REGION:-ap-east-1}
-      ENABLE_IMAGE_TRANSFORMATION: "true"
       IMGPROXY_URL: http://imgproxy:5001
       # S3 protocol endpoint configuration
       S3_PROTOCOL_ACCESS_KEY_ID: ${S3_PROTOCOL_ACCESS_KEY_ID}
