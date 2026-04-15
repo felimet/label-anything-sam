@@ -10,6 +10,8 @@
 >
 > 任務導覽入口： [README.md](README.md)
 
+>前往 [無 Cloudflare 帳號的替代方案](#無-cloudflare-帳號的替代方案)
+
 ## 路由規劃
 
 | 公開網域 | 內部目標 | 存取控制 |
