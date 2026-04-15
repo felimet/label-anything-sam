@@ -16,31 +16,34 @@
         push
 
 # ─── Core stack ─────────────────────────────────────────────
+CORE_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME)
+
 up:
-	docker compose up -d
+	$(CORE_COMPOSE) up -d
 
 down:
-	docker compose down
+	$(CORE_COMPOSE) down
 
 restart:
-	docker compose restart
+	$(CORE_COMPOSE) restart
 
 logs:
-	docker compose logs -f --tail=100
+	$(CORE_COMPOSE) logs -f --tail=100
 
 ps:
-	docker compose ps
+	$(CORE_COMPOSE) ps
 
 # ─── ML Backends (SAM3 + SAM2.1 image + video) ──────────────
 # override.yml must be included explicitly when using -f flags
 # (Docker Compose only auto-loads override.yml when no -f is specified)
-ML_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml
+ML_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME) -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml
+STACK_PROJECT_NAME ?= label-anything-sam
 SUPABASE_STANDALONE_ENV ?= .env.supabase
-SUPABASE_STANDALONE_COMPOSE = docker compose --env-file $(SUPABASE_STANDALONE_ENV) -f docker-compose.supabase.yml
+SUPABASE_STANDALONE_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME) --env-file $(SUPABASE_STANDALONE_ENV) -f docker-compose.supabase.yml
 SUPABASE_SAMPLE_ENV ?= .env.supabase.sample
-SUPABASE_SAMPLE_COMPOSE = docker compose --env-file .env --env-file $(SUPABASE_SAMPLE_ENV) -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.sample.yml
-TOOLS_COMPOSE_BASE = docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml
-TOOLS_COMPOSE = docker compose --env-file .env --env-file .env.tools -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml
+SUPABASE_SAMPLE_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME) --env-file .env --env-file $(SUPABASE_SAMPLE_ENV) -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.sample.yml
+TOOLS_COMPOSE_BASE = docker compose --project-name $(STACK_PROJECT_NAME) -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml
+TOOLS_COMPOSE = docker compose --project-name $(STACK_PROJECT_NAME) --env-file .env --env-file .env.tools -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml
 
 ml-up:
 	$(ML_COMPOSE) up -d

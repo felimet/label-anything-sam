@@ -20,9 +20,13 @@ cd label-anything-sam
 
 # 1) Core stack
 cp .env.example .env
+# Supabase standalone is required for default Label Studio DB path in this branch
+cp .env.supabase.example .env.supabase
 # Fill all <PLACEHOLDER> values
 # LABEL_STUDIO_USER_TOKEN must be <= 40 chars (use: openssl rand -hex 20)
+# IMPORTANT: keep POSTGRES_PASSWORD in .env and .env.supabase the same
 
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
 make up
 make init-minio
 
@@ -36,11 +40,9 @@ make ml-up
 cp .env.tools.example .env.tools
 make tools-up
 
-# 4) Supabase management (default for this branch, no native postgres image)
-# Pairing: docker-compose.supabase.yml + .env.supabase
-cp .env.supabase.example .env.supabase
-# Fill secrets and URLs in .env.supabase before first run.
-make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+# 4) Supabase management command aliases
+# (already started in step 1 for default DB route)
+# make supabase-up / make supabase-down / make supabase-logs
 ```
 
 Overlay minimal example for Label Studio integration (NOT part of this branch runtime flow):

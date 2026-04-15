@@ -44,16 +44,19 @@ cp .env.tools.example .env.tools
 # Supabase management (default in this branch)
 # Pairing: docker-compose.supabase.yml + .env.supabase
 cp .env.supabase.example .env.supabase
+# IMPORTANT: keep POSTGRES_PASSWORD in .env and .env.supabase the same.
 
 # Supabase minimal example mode for Label Studio integration (not in this branch runtime flow)
 # Pairing: docker-compose.supabase.sample.yml + .env.supabase.sample
 cp .env.supabase.sample.template .env.supabase.sample
 
+# Start Supabase standalone first (default Label Studio DB target uses supavisor)
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+
 # Start core stack (exposed on dev ports — see docker-compose.override.yml)
 make up
 make init-minio       # first time only
 make tools-up         # optional: RedisInsight local GUI
-make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase  # optional: Supabase management (standalone)
 
 # Verify
 make health

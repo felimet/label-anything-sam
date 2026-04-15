@@ -20,9 +20,13 @@ cd label-anything-sam
 
 # 1) 核心服務
 cp .env.example .env
+# 本分支預設 Label Studio 會連 Supabase standalone pooler
+cp .env.supabase.example .env.supabase
 # 填入所有 <PLACEHOLDER>
 # LABEL_STUDIO_USER_TOKEN 必須 <= 40 字元（建議：openssl rand -hex 20）
+# 重要：.env 與 .env.supabase 的 POSTGRES_PASSWORD 必須相同
 
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
 make up
 make init-minio
 
@@ -36,11 +40,9 @@ make ml-up
 cp .env.tools.example .env.tools
 make tools-up
 
-# 4) Supabase 管理（本分支預設，不使用原生 postgres 映像）
-# 配對檔案：docker-compose.supabase.yml + .env.supabase
-cp .env.supabase.example .env.supabase
-# 首次啟動前請先在 .env.supabase 填好密鑰與 URL。
-make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+# 4) Supabase 管理指令別名
+# （步驟 1 已先啟動，確保預設 DB 路徑可用）
+# make supabase-up / make supabase-down / make supabase-logs
 ```
 
 供 Label Studio 使用的示例模式最小集合（不納入本分支運作流程）：
