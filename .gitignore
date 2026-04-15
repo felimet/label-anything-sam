@@ -6,7 +6,7 @@
 .env
 .env.ml
 .env.supabase
-.env.supabase.overlay
+.env.supabase.sample
 .env.tools
 .env.supabase
 

@@ -1,4 +1,4 @@
-# Contributing Guide
+﻿# Contributing Guide
 
 > Audience: developers and contributors
 >
@@ -45,9 +45,9 @@ cp .env.tools.example .env.tools
 # Pairing: docker-compose.supabase.yml + .env.supabase
 cp .env.supabase.example .env.supabase
 
-# Overlay minimal example for Label Studio integration (not in this branch runtime flow)
-# Pairing: docker-compose.supabase.overlay.yml + .env.supabase.overlay
-cp .env.supabase.overlay.example .env.supabase.overlay
+# Supabase minimal example mode for Label Studio integration (not in this branch runtime flow)
+# Pairing: docker-compose.supabase.sample.yml + .env.supabase.sample
+cp .env.supabase.sample.template .env.supabase.sample
 
 # Start core stack (exposed on dev ports — see docker-compose.override.yml)
 make up
@@ -74,13 +74,13 @@ Dev override ports ([docker-compose.override.yml](../docker-compose.override.yml
 
 > **Windows 注意**：8000–9000 附近的 port 常被 Hyper-V 保留；若 bind 失敗改用 18000+ 範圍。
 
-Optional overlay ports:
+Optional example-mode ports:
 
 | Service | Host port | Notes |
 |---------|-----------|-------|
 | redisinsight | 127.0.0.1:15540 (default) | Redis GUI overlay (`make tools-up`) |
-| supabase-studio | 127.0.0.1:18091 (default) | Supabase Studio 管理 UI（僅 overlay 示例模式） |
-| supabase-meta | 127.0.0.1:18087 (default) | Supabase Postgres Meta REST API（僅 overlay 示例模式） |
+| supabase-studio | 127.0.0.1:18091 (default) | Supabase Studio 管理 UI（僅示例模式） |
+| supabase-meta | 127.0.0.1:18087 (default) | Supabase Postgres Meta REST API（僅示例模式） |
 
 ## Available Commands
 
@@ -103,6 +103,9 @@ Optional overlay ports:
 | `make supabase-standalone-up SUPABASE_STANDALONE_ENV=...` | Start Supabase standalone management stack (without native pg-db) |
 | `make supabase-standalone-down SUPABASE_STANDALONE_ENV=...` | Stop Supabase standalone management stack |
 | `make supabase-standalone-logs SUPABASE_STANDALONE_ENV=...` | Follow logs for Supabase standalone management stack |
+| `make supabase-sample-up SUPABASE_SAMPLE_ENV=...` | Start Supabase minimal example mode (supabase-studio + supabase-meta) |
+| `make supabase-sample-down` | Stop Supabase minimal example mode |
+| `make supabase-sample-logs SUPABASE_SAMPLE_ENV=...` | Follow logs for Supabase minimal example mode |
 | `make build-sam3-image` | Build SAM3 image backend Docker image |
 | `make build-sam3-video` | Build SAM3 video backend Docker image |
 | `make test-sam3-image` | Run pytest inside sam3-image-backend container |
@@ -174,7 +177,7 @@ docs(architecture): update volume table for dual backends
 - [ ] Tests pass: `pytest ml-backends/sam3-image/tests ml-backends/sam3-video/tests`
 - [ ] `.env.example` updated if new core env vars added
 - [ ] `.env.ml.example` updated if new SAM3 env vars added
-- [ ] `.env.supabase.overlay.example` updated if new Supabase overlay example env vars added
+- [ ] `.env.supabase.sample.template` updated if new Supabase example-mode env vars added
 - [ ] `.env.supabase.example` updated if new Supabase standalone stack env vars added
 - [ ] `.env.tools.example` updated if new local tools env vars added
 - [ ] `docs/configuration.md` updated if new env vars added

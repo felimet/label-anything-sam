@@ -1,4 +1,4 @@
-.PHONY: up down restart logs ps \
+﻿.PHONY: up down restart logs ps \
         ml-up ml-down \
         up-sam3-image up-sam3-video \
         up-sam21-image up-sam21-video \
@@ -10,6 +10,7 @@
         test-sam21-image test-sam21-video \
 		supabase-up supabase-down supabase-logs \
 		supabase-standalone-up supabase-standalone-down supabase-standalone-logs \
+		supabase-sample-up supabase-sample-down supabase-sample-logs \
 	tools-up tools-down tools-logs \
         init-minio health create-admin reset-password \
         push
@@ -36,6 +37,8 @@ ps:
 ML_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.ml.yml
 SUPABASE_STANDALONE_ENV ?= .env.supabase
 SUPABASE_STANDALONE_COMPOSE = docker compose --env-file $(SUPABASE_STANDALONE_ENV) -f docker-compose.supabase.yml
+SUPABASE_SAMPLE_ENV ?= .env.supabase.sample
+SUPABASE_SAMPLE_COMPOSE = docker compose --env-file .env --env-file $(SUPABASE_SAMPLE_ENV) -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.sample.yml
 TOOLS_COMPOSE_BASE = docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml
 TOOLS_COMPOSE = docker compose --env-file .env --env-file .env.tools -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.tools.yml
 
@@ -112,6 +115,21 @@ supabase-standalone-up: supabase-up
 supabase-standalone-down: supabase-down
 
 supabase-standalone-logs: supabase-logs
+
+# Supabase minimal example mode (studio + meta only).
+supabase-sample-up:
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
+	@test -f $(SUPABASE_SAMPLE_ENV) || (echo "Missing $(SUPABASE_SAMPLE_ENV). Run: cp .env.supabase.sample.template .env.supabase.sample" && exit 1)
+	$(SUPABASE_SAMPLE_COMPOSE) up -d supabase-studio supabase-meta
+
+supabase-sample-down:
+	-$(SUPABASE_SAMPLE_COMPOSE) stop supabase-studio supabase-meta
+	-$(SUPABASE_SAMPLE_COMPOSE) rm -f supabase-studio supabase-meta
+
+supabase-sample-logs:
+	@test -f .env || (echo "Missing .env. Run: cp .env.example .env" && exit 1)
+	@test -f $(SUPABASE_SAMPLE_ENV) || (echo "Missing $(SUPABASE_SAMPLE_ENV). Run: cp .env.supabase.sample.template .env.supabase.sample" && exit 1)
+	$(SUPABASE_SAMPLE_COMPOSE) logs -f --tail=100 supabase-studio supabase-meta
 
 # ─── Developer Tools ─────────────────────────────────────────
 tools-up:

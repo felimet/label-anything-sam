@@ -1,4 +1,4 @@
-# label-anything-sam
+﻿# label-anything-sam
 
 適用於生產環境的 Label Studio 部署方案，內含可選用的 SAM3 與 SAM2.1 ML 後端。
 
@@ -43,13 +43,13 @@ cp .env.supabase.example .env.supabase
 make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
 ```
 
-供 Label Studio 使用的 overlay 最小集合示例（不納入本分支運作流程）：
+供 Label Studio 使用的示例模式最小集合（不納入本分支運作流程）：
 
 ```bash
 # 僅示例配對：
-# docker-compose.supabase.overlay.yml + .env.supabase.overlay.example
-cp .env.supabase.overlay.example .env.supabase.overlay
-docker compose --env-file .env.supabase.overlay -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.overlay.yml up -d
+# docker-compose.supabase.sample.yml + .env.supabase.sample.template
+cp .env.supabase.sample.template .env.supabase.sample
+make supabase-sample-up SUPABASE_SAMPLE_ENV=.env.supabase.sample
 ```
 
 可選的 Cloudflare Tunnel 管理面路由請直接在 Cloudflare UI 設定（不是填 env 變數），例如：
@@ -91,12 +91,12 @@ make health
 - `.env.ml.example` → `.env.ml`：SAM3/SAM2.1 後端（選填）
 - `.env.tools.example` → `.env.tools`：RedisInsight 等本機工具（選填）
 - `.env.supabase.example` → `.env.supabase`：Supabase 獨立管理 stack（不使用原生 pg-db）
-- `.env.supabase.overlay.example` → `.env.supabase.overlay`：Supabase overlay 最小集合示例（僅文檔示例）
+- `.env.supabase.sample.template` → `.env.supabase.sample`：Supabase 示例模式最小集合（僅文檔示例）
 
 Supabase 模式邊界：
 
 - 本分支運作模式：`docker-compose.supabase.yml` + `.env.supabase`
-- 僅示例模式：`docker-compose.supabase.overlay.yml` + `.env.supabase.overlay`
+- 僅示例模式：`docker-compose.supabase.sample.yml` + `.env.supabase.sample`
 
 `.env.example` 為唯一完整核心模板。
 
@@ -127,6 +127,7 @@ Supabase 模式邊界：
 - `make tools-up / tools-down / tools-logs`：RedisInsight 本機 GUI 疊加層
 - `make supabase-up / supabase-down / supabase-logs`：Supabase 管理（standalone stack，預設）
 - `make supabase-standalone-up / supabase-standalone-down / supabase-standalone-logs`：明確指定 standalone 別名
+- `make supabase-sample-up / supabase-sample-down / supabase-sample-logs`：Supabase 最小示例模式（studio + meta）
 - `make build-sam3-image / build-sam3-video / build-sam21-image / build-sam21-video`：建置 ML 映像
 - `make test-sam3-image / test-sam3-video / test-sam21-image / test-sam21-video`：執行 ML 後端測試
 - `make init-minio`：首次建立 bucket 與 service account

@@ -1,14 +1,14 @@
 ﻿# ============================================================
-# Supabase Admin Overlay (Studio + Meta)
-# MODE: Overlay only
-# Pairing: docker-compose.supabase.overlay.yml + .env.supabase.overlay
+# Supabase Admin Example (Studio + Meta)
+# MODE: Example only
+# Pairing: docker-compose.supabase.sample.yml + .env.supabase.sample
 # For standalone full stack, use: docker-compose.supabase.yml + .env.supabase
 # Directly aligned to supabase/supabase/docker naming and env keys.
 #
 # Scope for this repository:
 #   - supabase-studio: management UI (supabase/studio)
 #   - supabase-meta: Postgres management REST API (+ Swagger docs)
-#   - supabase-storage + supabase-imgproxy: optional S3-backed storage overlay
+#   - supabase-storage + supabase-imgproxy: optional S3-backed storage example
 #     (profile: supabase-s3; adapted for MinIO)
 #
 # Notes:

@@ -1,4 +1,4 @@
-# label-anything-sam
+﻿# label-anything-sam
 
 Production-ready Label Studio deployment stack with optional SAM3 and SAM2.1 ML backends.
 
@@ -47,9 +47,9 @@ Overlay minimal example for Label Studio integration (NOT part of this branch ru
 
 ```bash
 # Example pairing only:
-# docker-compose.supabase.overlay.yml + .env.supabase.overlay.example
-cp .env.supabase.overlay.example .env.supabase.overlay
-docker compose --env-file .env.supabase.overlay -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.overlay.yml up -d
+# docker-compose.supabase.sample.yml + .env.supabase.sample.template
+cp .env.supabase.sample.template .env.supabase.sample
+make supabase-sample-up SUPABASE_SAMPLE_ENV=.env.supabase.sample
 ```
 
 Optional Cloudflare Tunnel admin routes are configured in Cloudflare UI (not via env vars), for example:
@@ -91,12 +91,12 @@ To avoid one oversized env file, variables are split by scope:
 - `.env.ml.example` → `.env.ml`: SAM3/SAM2.1 backends (optional)
 - `.env.tools.example` → `.env.tools`: Local dev tools such as RedisInsight (optional)
 - `.env.supabase.example` → `.env.supabase`: Supabase standalone management stack (without native pg-db)
-- `.env.supabase.overlay.example` → `.env.supabase.overlay`: Supabase overlay minimal example (documentation/demo only)
+- `.env.supabase.sample.template` → `.env.supabase.sample`: Supabase minimal example mode (documentation/demo only)
 
 Supabase mode boundaries:
 
 - Runtime mode (this branch): `docker-compose.supabase.yml` + `.env.supabase`
-- Example mode only: `docker-compose.supabase.overlay.yml` + `.env.supabase.overlay`
+- Example mode only: `docker-compose.supabase.sample.yml` + `.env.supabase.sample`
 
 `.env.example` is the single complete core template.
 
@@ -127,6 +127,7 @@ Supabase mode boundaries:
 - `make tools-up / tools-down / tools-logs`: RedisInsight local GUI overlay
 - `make supabase-up / supabase-down / supabase-logs`: Supabase management (standalone stack, default)
 - `make supabase-standalone-up / supabase-standalone-down / supabase-standalone-logs`: Explicit standalone aliases
+- `make supabase-sample-up / supabase-sample-down / supabase-sample-logs`: Supabase minimal example mode (studio + meta)
 - `make build-sam3-image / build-sam3-video / build-sam21-image / build-sam21-video`: Build ML images
 - `make test-sam3-image / test-sam3-video / test-sam21-image / test-sam21-video`: Run ML backend tests
 - `make init-minio`: One-time bucket and service-account initialization

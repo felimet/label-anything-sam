@@ -1,4 +1,4 @@
-# 開發者 Cookbook
+﻿# 開發者 Cookbook
 
 本文件面向開發者，目標是用最短路徑完成「改程式、驗證、提交」。
 規範與完整背景請搭配 [../CONTRIBUTING.md](../CONTRIBUTING.md)。
@@ -74,7 +74,7 @@ make test-sam3-image
 調整 env 變數時，維持程式、範例檔、文件一致。
 
 ### 變更清單
-1. 更新 `.env.example` / `.env.ml.example` / `.env.supabase.overlay.example` / `.env.supabase.example` / `.env.tools.example`
+1. 更新 `.env.example` / `.env.ml.example` / `.env.supabase.sample.template` / `.env.supabase.example` / `.env.tools.example`
 2. 更新 [../configuration.md](../configuration.md) 對應段落
 3. 若操作流程受影響，更新對應 cookbook
 4. 若健康檢查或啟動路徑受影響，更新 [../RUNBOOK.md](../RUNBOOK.md)
