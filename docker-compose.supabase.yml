@@ -1,4 +1,4 @@
-# Usage
+﻿# Usage
 #   Start:              docker compose up -d
 #   Stop:               docker compose down
 #   Dev mode:           docker compose -f docker-compose.yml -f ./dev/docker-compose.dev.yml up -d
@@ -9,16 +9,19 @@
 #
 # MODE: Standalone Supabase stack only
 # Pairing: docker-compose.supabase.yml + .env.supabase
-# For overlay mode on core stack, use: docker-compose.supabase.overlay.yml + .env.supabase
-
-name: supabase-ls
+# For example mode on core stack, use: docker-compose.supabase.sample.yml + .env.supabase.sample
+# NOTE: do not declare `name:` here.
+# Project name must be controlled by base docker-compose.yml only.
 
 services:
 
+  # Supabase Dashboard UI (management console)
   studio:
     container_name: supabase-studio
     image: supabase/studio:2026.04.08-sha-205cbe7
     restart: unless-stopped
+    networks:
+      - internal
     healthcheck:
       test:
         [
@@ -72,12 +75,13 @@ services:
       - ./supabase-volumes/snippets:/app/snippets:z
       - ./supabase-volumes/functions:/app/edge-functions:z
 
+  # API gateway / public entrypoint for Supabase services
   kong:
     container_name: supabase-kong
     image: kong/kong:3.9.1
     restart: unless-stopped
     networks:
-      default:
+      internal:
         aliases:
           - api-gw
     healthcheck:
@@ -119,10 +123,13 @@ services:
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
     entrypoint: /home/kong/kong-entrypoint.sh
 
+  # Authentication and identity service (GoTrue)
   auth:
     container_name: supabase-auth
     image: supabase/gotrue:v2.186.0
     restart: unless-stopped
+    networks:
+      - internal
     healthcheck:
       test:
         [
@@ -255,10 +262,13 @@ services:
       # GOTRUE_HOOK_SEND_EMAIL_URI: "http://host.docker.internal:54321/functions/v1/email_sender"
       # GOTRUE_HOOK_SEND_EMAIL_SECRETS: "v1,whsec_VGhpcyBpcyBhbiBleGFtcGxlIG9mIGEgc2hvcnRlciBCYXNlNjQgc3RyaW5n"
 
+  # PostgREST API layer over PostgreSQL
   rest:
     container_name: supabase-rest
     image: postgrest/postgrest:v14.8
     restart: unless-stopped
+    networks:
+      - internal
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -283,11 +293,14 @@ services:
         "postgrest"
       ]
 
+  # Realtime websocket service (logical replication)
   realtime:
     # This container name looks inconsistent but is correct because realtime constructs tenant id by parsing the subdomain
     container_name: realtime-dev.supabase-realtime
     image: supabase/realtime:v2.76.5
     restart: unless-stopped
+    networks:
+      - internal
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -330,10 +343,13 @@ services:
       DISABLE_HEALTHCHECK_LOGGING: "true"
 
   # To use S3 backed storage: docker compose -f docker-compose.yml -f docker-compose.s3.yml up
+  # Storage API service (file/S3 backend)
   storage:
     container_name: supabase-storage
     image: supabase/storage-api:v1.48.26
     restart: unless-stopped
+    networks:
+      - internal
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -393,10 +409,13 @@ services:
     volumes:
       - ./supabase-volumes/storage:/var/lib/storage:z
 
+  # Image transformation proxy for Storage API
   imgproxy:
     container_name: supabase-imgproxy
     image: darthsim/imgproxy:v3.30.1
     restart: unless-stopped
+    networks:
+      - internal
     volumes:
       - ./supabase-volumes/storage:/var/lib/storage:z
     healthcheck:
@@ -416,10 +435,13 @@ services:
       IMGPROXY_AUTO_WEBP: ${IMGPROXY_AUTO_WEBP}
       IMGPROXY_MAX_SRC_RESOLUTION: 16.8
 
+  # Postgres management REST API (used by Studio)
   meta:
     container_name: supabase-meta
     image: supabase/postgres-meta:v0.96.3
     restart: unless-stopped
+    networks:
+      - internal
     depends_on:
       db:
         # Disable this if you are using an external Postgres database
@@ -433,10 +455,13 @@ services:
       PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
       CRYPTO_KEY: ${PG_META_CRYPTO_KEY}
 
+  # Edge Functions runtime (Deno)
   functions:
     container_name: supabase-edge-functions
     image: supabase/edge-runtime:v1.71.2
     restart: unless-stopped
+    networks:
+      - internal
     volumes:
       - ./supabase-volumes/functions:/home/deno/functions:z
       - deno-cache:/root/.cache/deno
@@ -464,10 +489,13 @@ services:
         "/home/deno/functions/main"
       ]
 
+  # Analytics / logging backend (Logflare)
   analytics:
     container_name: supabase-analytics
     image: supabase/logflare:1.36.1
     restart: unless-stopped
+    networks:
+      - internal
     # ports:
     #   - 4000:4000
     # Uncomment to use Big Query backend for analytics
@@ -512,10 +540,13 @@ services:
       # GOOGLE_PROJECT_NUMBER: ${GOOGLE_PROJECT_NUMBER}
 
   # Comment out everything below this point if you are using an external Postgres database
+  # Supabase PostgreSQL database engine
   db:
     container_name: supabase-db
     image: supabase/postgres:15.14.1.107
     restart: unless-stopped
+    networks:
+      - internal
     volumes:
       - ./supabase-volumes/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:z
       # Must be superuser to create event trigger
@@ -524,6 +555,8 @@ services:
       - ./supabase-volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:z
       # Initialize the database settings with JWT_SECRET and JWT_EXP
       - ./supabase-volumes/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:z
+      # Label Studio extensions for search/task features.
+      - ./supabase-volumes/db/labelstudio_extensions.sql:/docker-entrypoint-initdb.d/init-scripts/99-labelstudio-extensions.sql:z
       # PGDATA directory is persisted between restarts
       - ./supabase-volumes/db/data:/var/lib/postgresql/data:z
       # Changes required for internal supabase data such as _analytics
@@ -566,10 +599,13 @@ services:
         "log_min_messages=fatal" # prevents Realtime polling queries from appearing in logs
       ]
 
+  # Log pipeline collector/forwarder
   vector:
     container_name: supabase-vector
     image: timberio/vector:0.53.0-alpine
     restart: unless-stopped
+    networks:
+      - internal
     volumes:
       - ./supabase-volumes/logs/vector.yml:/etc/vector/vector.yml:ro,z
       - ${DOCKER_SOCKET_LOCATION}:/var/run/docker.sock:ro,z
@@ -597,10 +633,13 @@ services:
       - "label=disable"
 
   # Update the DATABASE_URL if you are using an external Postgres database
+  # Database pooler (session/transaction modes)
   supavisor:
     container_name: supabase-pooler
     image: supabase/supavisor:2.7.4
     restart: unless-stopped
+    networks:
+      - internal
     ports:
       - ${POSTGRES_PORT}:5432
       - ${POOLER_PROXY_PORT_TRANSACTION}:6543
@@ -652,3 +691,7 @@ services:
 volumes:
   db-config:
   deno-cache:
+
+networks:
+  internal:
+    driver: bridge

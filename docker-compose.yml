@@ -140,8 +140,6 @@ services:
     restart: unless-stopped
     logging: *default-logging
     depends_on:
-      pg-db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
@@ -150,10 +148,11 @@ services:
     environment:
       # Database
       - DJANGO_DB=default
-      - POSTGRE_HOST=pg-db
-      - POSTGRE_PORT=5432
-      - POSTGRE_NAME=${POSTGRES_DB:-labelstudio}
-      - POSTGRE_USER=${POSTGRES_USER:-labelstudio}
+      # Default path: connect to Supabase standalone pooler via shared internal network.
+      - POSTGRE_HOST=${LS_POSTGRE_HOST:-supavisor}
+      - POSTGRE_PORT=${LS_POSTGRE_PORT:-5432}
+      - POSTGRE_NAME=${LS_POSTGRE_NAME:-postgres}
+      - POSTGRE_USER=${LS_POSTGRE_USER:-postgres}
       - POSTGRE_PASSWORD=${POSTGRES_PASSWORD}
       # Redis (task queue + caching)
       - REDIS_LOCATION=redis://:${REDIS_PASSWORD}@redis:6379/1

@@ -1,4 +1,4 @@
-# 環境變數設定說明
+﻿# 環境變數設定說明
 
 核心變數定義於 `.env`（建議由 `.env.example` 複製後填入）。
 
@@ -21,7 +21,7 @@
 |------|------|----------|
 | `.env.example` → `.env` | 核心堆疊（pg-db / redis / minio / label-studio / nginx / cloudflared） | **必填** |
 | `.env.ml.example` → `.env.ml` | SAM3 / SAM2.1 後端 | 啟用 ML 疊加層時 |
-| `.env.supabase.overlay.example` → `.env.supabase.overlay` | Supabase overlay 最小集合示例（Label Studio 整合示例，非本版運作流程） | 參考示例時 |
+| `.env.supabase.sample.template` → `.env.supabase.sample` | Supabase 示例模式最小集合（Label Studio 整合示例，非本版運作流程） | 參考示例時 |
 | `.env.supabase.example` → `.env.supabase` | Supabase 獨立管理 stack（不使用原生 `pg-db`，使用官方 `db` 服務） | 啟用 Supabase 獨立管理模式時 |
 | `.env.tools.example` → `.env.tools` | RedisInsight 等開發工具 | 啟用工具疊加層時 |
 
@@ -29,7 +29,7 @@
 
 ## PostgreSQL
 
-以下為使用者填入 `.env` 的變數；compose 會將 `POSTGRES_*` 轉譯成 Label Studio 內部所需的 `POSTGRE_*` 格式（注意：LS 官方 env var 名稱無 `SDB` 中綴）。
+以下為使用者填入 `.env` 的變數；核心 `pg-db` 使用 `POSTGRES_*`，而 Label Studio 連線目標使用 `LS_POSTGRE_*`（注意：LS 官方 env var 名稱無 `SDB` 中綴）。
 
 | 變數 | 預設值 | 說明 |
 |------|--------|------|
@@ -37,6 +37,17 @@
 | `POSTGRES_USER` | `labelstudio` | 資料庫使用者名稱 |
 | `POSTGRES_PASSWORD` | — | **必填。** 強隨機密碼 |
 | `POSTGRES_DB` | `labelstudio` | 資料庫名稱 |
+
+### Label Studio DB target（連 Supabase standalone）
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `LS_POSTGRE_HOST` | `supavisor` | Label Studio 連線目標主機（同專案 shared internal network 下的 Supabase pooler service DNS） |
+| `LS_POSTGRE_PORT` | `5432` | Label Studio 連線埠（Supabase standalone session mode） |
+| `LS_POSTGRE_NAME` | `postgres` | Label Studio 使用的資料庫名稱 |
+| `LS_POSTGRE_USER` | `postgres` | Label Studio 使用的資料庫使用者 |
+
+> 若使用上述預設模式，請確保 `.env` 的 `POSTGRES_PASSWORD` 與 `.env.supabase` 的 `POSTGRES_PASSWORD` 相同。
 
 ## Redis
 
@@ -312,11 +323,11 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 
 <!-- END AUTO-GENERATED -->
 
-## Supabase 管理疊加層示例（`.env.supabase.overlay`，僅示例）
+## Supabase 管理示例模式（`.env.supabase.sample`，僅示例）
 
-此區為 Supabase 管理疊加層最小集合示例（對齊 `supabase/supabase/docker` 變數命名），不應混入核心 `.env`。
+此區為 Supabase 管理示例模式最小集合（對齊 `supabase/supabase/docker` 變數命名），不應混入核心 `.env`。
 
-配對 compose：`docker-compose.supabase.overlay.yml`
+配對 compose：`docker-compose.supabase.sample.yml`
 
 此模式僅供 Label Studio 整合示例，不納入本版本預設運作流程。
 
@@ -397,7 +408,11 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 - Env template: `.env.supabase.example`
 - 建議實際檔案: `.env.supabase`
 
-此模式與 overlay 示例模式完全分離；不要混用 `.env.supabase.overlay`。
+專案名稱由基底 `docker-compose.yml` 控制；overlay 檔不宣告 `name:`。
+若需讓 Label Studio 以 `LS_POSTGRE_HOST=supavisor` 透過 service DNS 連線，
+請以相同 project name 啟動核心與 Supabase stack。
+
+此模式與示例模式完全分離；不要混用 `.env.supabase.sample`。
 
 啟動方式：
 
@@ -407,6 +422,24 @@ make supabase-standalone-up SUPABASE_STANDALONE_ENV=.env.supabase
 ```
 
 此模式會使用 `db` 服務（`supabase/postgres`）作為資料庫，與核心 `pg-db` 管線分離。
+
+### docker-compose.supabase.yml 服務用途
+
+| Service | 用途 |
+|------|------|
+| `studio` | Supabase Dashboard 管理 UI |
+| `kong` | API gateway / 對外入口 |
+| `auth` | 身分驗證服務（GoTrue） |
+| `rest` | PostgREST API 層 |
+| `realtime` | Realtime WebSocket 服務 |
+| `storage` | Storage API（檔案/S3） |
+| `imgproxy` | 影像轉換服務（供 Storage 使用） |
+| `meta` | PostgreSQL 管理 API（供 Studio） |
+| `functions` | Edge Functions 執行環境 |
+| `analytics` | Logflare 分析與日誌後端 |
+| `db` | Supabase PostgreSQL 引擎 |
+| `vector` | 日誌收集/轉送管線 |
+| `supavisor` | 資料庫連線池（session/transaction） |
 
 ## 開發工具（`.env.tools`）
 
