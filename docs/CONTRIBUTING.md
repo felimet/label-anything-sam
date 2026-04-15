@@ -41,17 +41,19 @@ cp .env.ml.example .env.ml
 # Optional local tools (RedisInsight)
 cp .env.tools.example .env.tools
 
-# Optional Supabase admin overlay
+# Supabase management (default in this branch)
+# Pairing: docker-compose.supabase.yml + .env.supabase
 cp .env.supabase.example .env.supabase
+
+# Overlay minimal example for Label Studio integration (not in this branch runtime flow)
+# Pairing: docker-compose.supabase.overlay.yml + .env.supabase.overlay
+cp .env.supabase.overlay.example .env.supabase.overlay
 
 # Start core stack (exposed on dev ports — see docker-compose.override.yml)
 make up
 make init-minio       # first time only
 make tools-up         # optional: RedisInsight local GUI
-make supabase-up      # optional: Supabase admin overlay (studio + meta)
-# Optional Supabase S3 profile prerequisites:
-#   set SUPABASE_STORAGE_POSTGREST_URL in .env.supabase to a reachable PostgREST endpoint
-make supabase-s3-up   # optional: Supabase S3 storage profile (advanced)
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase  # optional: Supabase management (standalone)
 
 # Verify
 make health
@@ -77,10 +79,8 @@ Optional overlay ports:
 | Service | Host port | Notes |
 |---------|-----------|-------|
 | redisinsight | 127.0.0.1:15540 (default) | Redis GUI overlay (`make tools-up`) |
-| supabase-studio | 127.0.0.1:18091 (default) | Supabase Studio 管理 UI (`make supabase-up`) |
-| supabase-meta | 127.0.0.1:18087 (default) | Supabase Postgres Meta REST API (`make supabase-up`) |
-
-`supabase-s3` profile uses internal ports only (`supabase-storage:5000`, `supabase-imgproxy:5001`) and does not publish host ports.
+| supabase-studio | 127.0.0.1:18091 (default) | Supabase Studio 管理 UI（僅 overlay 示例模式） |
+| supabase-meta | 127.0.0.1:18087 (default) | Supabase Postgres Meta REST API（僅 overlay 示例模式） |
 
 ## Available Commands
 
@@ -97,12 +97,12 @@ Optional overlay ports:
 | `make tools-up` | Start RedisInsight local GUI overlay |
 | `make tools-down` | Stop RedisInsight local GUI overlay |
 | `make tools-logs` | Follow RedisInsight logs |
-| `make supabase-up` | Start Supabase admin overlay (supabase-studio + supabase-meta) |
-| `make supabase-down` | Stop Supabase admin overlay |
-| `make supabase-logs` | Follow Supabase admin overlay logs |
-| `make supabase-s3-up` | Start optional Supabase S3 storage profile (supabase-storage + supabase-imgproxy) |
-| `make supabase-s3-down` | Stop optional Supabase S3 storage profile |
-| `make supabase-s3-logs` | Follow optional Supabase S3 storage profile logs |
+| `make supabase-up SUPABASE_STANDALONE_ENV=...` | Start Supabase management stack (standalone default) |
+| `make supabase-down SUPABASE_STANDALONE_ENV=...` | Stop Supabase management stack |
+| `make supabase-logs SUPABASE_STANDALONE_ENV=...` | Follow logs for Supabase management stack |
+| `make supabase-standalone-up SUPABASE_STANDALONE_ENV=...` | Start Supabase standalone management stack (without native pg-db) |
+| `make supabase-standalone-down SUPABASE_STANDALONE_ENV=...` | Stop Supabase standalone management stack |
+| `make supabase-standalone-logs SUPABASE_STANDALONE_ENV=...` | Follow logs for Supabase standalone management stack |
 | `make build-sam3-image` | Build SAM3 image backend Docker image |
 | `make build-sam3-video` | Build SAM3 video backend Docker image |
 | `make test-sam3-image` | Run pytest inside sam3-image-backend container |
@@ -174,6 +174,7 @@ docs(architecture): update volume table for dual backends
 - [ ] Tests pass: `pytest ml-backends/sam3-image/tests ml-backends/sam3-video/tests`
 - [ ] `.env.example` updated if new core env vars added
 - [ ] `.env.ml.example` updated if new SAM3 env vars added
-- [ ] `.env.supabase.example` updated if new Supabase overlay env vars added
+- [ ] `.env.supabase.overlay.example` updated if new Supabase overlay example env vars added
+- [ ] `.env.supabase.example` updated if new Supabase standalone stack env vars added
 - [ ] `.env.tools.example` updated if new local tools env vars added
 - [ ] `docs/configuration.md` updated if new env vars added

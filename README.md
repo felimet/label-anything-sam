@@ -36,18 +36,20 @@ make ml-up
 cp .env.tools.example .env.tools
 make tools-up
 
-# 4) Optional Supabase admin overlay (Studio + Meta API)
+# 4) Supabase management (default for this branch, no native postgres image)
+# Pairing: docker-compose.supabase.yml + .env.supabase
 cp .env.supabase.example .env.supabase
-# Set required values before startup:
-#   POSTGRES_PASSWORD=<same password as .env>
-#   PG_META_CRYPTO_KEY=<at least 32 chars>
-make supabase-up
+# Fill secrets and URLs in .env.supabase before first run.
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+```
 
-# 5) Optional Supabase S3 storage profile (advanced)
-# Requires MinIO service account from `make init-minio` and a reachable PostgREST endpoint.
-# Example:
-#   SUPABASE_STORAGE_POSTGREST_URL=http://<your-postgrest-host>:3000
-make supabase-s3-up
+Overlay minimal example for Label Studio integration (NOT part of this branch runtime flow):
+
+```bash
+# Example pairing only:
+# docker-compose.supabase.overlay.yml + .env.supabase.overlay.example
+cp .env.supabase.overlay.example .env.supabase.overlay
+docker compose --env-file .env.supabase.overlay -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.overlay.yml up -d
 ```
 
 Optional Cloudflare Tunnel admin routes are configured in Cloudflare UI (not via env vars), for example:
@@ -88,7 +90,13 @@ To avoid one oversized env file, variables are split by scope:
 - `.env.example` → `.env`: Core runtime stack (required)
 - `.env.ml.example` → `.env.ml`: SAM3/SAM2.1 backends (optional)
 - `.env.tools.example` → `.env.tools`: Local dev tools such as RedisInsight (optional)
-- `.env.supabase.example` → `.env.supabase`: Supabase admin overlay (Studio + Meta API, optional)
+- `.env.supabase.example` → `.env.supabase`: Supabase standalone management stack (without native pg-db)
+- `.env.supabase.overlay.example` → `.env.supabase.overlay`: Supabase overlay minimal example (documentation/demo only)
+
+Supabase mode boundaries:
+
+- Runtime mode (this branch): `docker-compose.supabase.yml` + `.env.supabase`
+- Example mode only: `docker-compose.supabase.overlay.yml` + `.env.supabase.overlay`
 
 `.env.example` is the single complete core template.
 
@@ -111,15 +119,14 @@ To avoid one oversized env file, variables are split by scope:
 - [docs/sam21-backend.md](docs/sam21-backend.md): SAM2.1 backend behavior and constraints
 - [docs/RUNBOOK.md](docs/RUNBOOK.md): Operations, incident response, backup and restore
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md): Development workflow and contribution policy
-- [docs/releases/v1.1.0-plan.md](docs/releases/v1.1.0-plan.md): Minor-version cadence and migration milestones
 
 ## Make Targets (Short List)
 
 - `make up / down / restart / logs / ps`: Core stack lifecycle
 - `make ml-up / ml-down`: Core stack with ML overlays
 - `make tools-up / tools-down / tools-logs`: RedisInsight local GUI overlay
-- `make supabase-up / supabase-down / supabase-logs`: Supabase admin overlay (Studio + Meta API)
-- `make supabase-s3-up / supabase-s3-down / supabase-s3-logs`: Supabase optional S3 storage profile (storage-api + imgproxy)
+- `make supabase-up / supabase-down / supabase-logs`: Supabase management (standalone stack, default)
+- `make supabase-standalone-up / supabase-standalone-down / supabase-standalone-logs`: Explicit standalone aliases
 - `make build-sam3-image / build-sam3-video / build-sam21-image / build-sam21-video`: Build ML images
 - `make test-sam3-image / test-sam3-video / test-sam21-image / test-sam21-video`: Run ML backend tests
 - `make init-minio`: One-time bucket and service-account initialization

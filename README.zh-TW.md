@@ -36,18 +36,20 @@ make ml-up
 cp .env.tools.example .env.tools
 make tools-up
 
-# 4) 可選 Supabase 管理疊加層（Studio + Meta API）
+# 4) Supabase 管理（本分支預設，不使用原生 postgres 映像）
+# 配對檔案：docker-compose.supabase.yml + .env.supabase
 cp .env.supabase.example .env.supabase
-# 啟動前先設定必填值：
-#   POSTGRES_PASSWORD=<與 .env 相同密碼>
-#   PG_META_CRYPTO_KEY=<至少 32 字元>
-make supabase-up
+# 首次啟動前請先在 .env.supabase 填好密鑰與 URL。
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+```
 
-# 5) 可選 Supabase S3 storage profile（進階）
-# 需先執行 `make init-minio` 建立 MinIO service account，且需可用的 PostgREST 端點。
-# 例如：
-#   SUPABASE_STORAGE_POSTGREST_URL=http://<your-postgrest-host>:3000
-make supabase-s3-up
+供 Label Studio 使用的 overlay 最小集合示例（不納入本分支運作流程）：
+
+```bash
+# 僅示例配對：
+# docker-compose.supabase.overlay.yml + .env.supabase.overlay.example
+cp .env.supabase.overlay.example .env.supabase.overlay
+docker compose --env-file .env.supabase.overlay -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.supabase.overlay.yml up -d
 ```
 
 可選的 Cloudflare Tunnel 管理面路由請直接在 Cloudflare UI 設定（不是填 env 變數），例如：
@@ -88,7 +90,13 @@ make health
 - `.env.example` → `.env`：核心執行堆疊（必填）
 - `.env.ml.example` → `.env.ml`：SAM3/SAM2.1 後端（選填）
 - `.env.tools.example` → `.env.tools`：RedisInsight 等本機工具（選填）
-- `.env.supabase.example` → `.env.supabase`：Supabase 管理疊加層（Studio + Meta API，選填）
+- `.env.supabase.example` → `.env.supabase`：Supabase 獨立管理 stack（不使用原生 pg-db）
+- `.env.supabase.overlay.example` → `.env.supabase.overlay`：Supabase overlay 最小集合示例（僅文檔示例）
+
+Supabase 模式邊界：
+
+- 本分支運作模式：`docker-compose.supabase.yml` + `.env.supabase`
+- 僅示例模式：`docker-compose.supabase.overlay.yml` + `.env.supabase.overlay`
 
 `.env.example` 為唯一完整核心模板。
 
@@ -111,15 +119,14 @@ make health
 - [docs/sam21-backend.md](docs/sam21-backend.md)：SAM2.1 後端行為與限制
 - [docs/RUNBOOK.md](docs/RUNBOOK.md)：維運、事故排除、備份與還原
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)：開發流程與貢獻規範
-- [docs/releases/v1.1.0-plan.md](docs/releases/v1.1.0-plan.md)：次版本節奏與遷移里程碑
 
 ## 常用 Make 指令（精簡）
 
 - `make up / down / restart / logs / ps`：核心服務生命週期
 - `make ml-up / ml-down`：核心服務 + ML 疊加層
 - `make tools-up / tools-down / tools-logs`：RedisInsight 本機 GUI 疊加層
-- `make supabase-up / supabase-down / supabase-logs`：Supabase 管理疊加層（Studio + Meta API）
-- `make supabase-s3-up / supabase-s3-down / supabase-s3-logs`：Supabase 可選 S3 storage profile（storage-api + imgproxy）
+- `make supabase-up / supabase-down / supabase-logs`：Supabase 管理（standalone stack，預設）
+- `make supabase-standalone-up / supabase-standalone-down / supabase-standalone-logs`：明確指定 standalone 別名
 - `make build-sam3-image / build-sam3-video / build-sam21-image / build-sam21-video`：建置 ML 映像
 - `make test-sam3-image / test-sam3-video / test-sam21-image / test-sam21-video`：執行 ML 後端測試
 - `make init-minio`：首次建立 bucket 與 service account

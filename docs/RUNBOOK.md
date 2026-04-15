@@ -48,7 +48,7 @@ make health
 ### Upgrade services
 
 ```bash
-# 1. Update version pins in .env (LABEL_STUDIO_VERSION, POSTGRES_VERSION, etc.)
+# 1. Update version pins in .env (LABEL_STUDIO_VERSION, PG_DB_IMAGE, etc.)
 #    Note: MinIO uses firstfinger/minio:latest (no version pin) — docker compose pull
 #    will always fetch the latest daily build. To hold a specific build, change
 #    docker-compose.yml minio.image to "firstfinger/minio:<tag>".
@@ -66,12 +66,22 @@ make health
 
 > ⚠️ **PostgreSQL major version 變更不可直接沿用舊資料目錄。**
 >
-> 若 `POSTGRES_VERSION` 發生 major 變動（例如 `17` → `15.17`），不可直接重用既有 `./postgres-data`。請先做 SQL 備份，再以新版本重建資料庫並還原：
+> 若 `PG_DB_IMAGE` 的 major 版本發生變動（例如 `14.x` → `15.x`），不可直接重用既有 `./postgres-data`。請先做 SQL 備份，再以新版本重建資料庫並還原：
 >
 > 1. `docker compose exec pg-db pg_dump -U labelstudio labelstudio > backup.sql`
 > 2. 停止 stack，清空或替換 `./postgres-data`
 > 3. 以新版本啟動 `pg-db`
 > 4. `docker compose exec -T pg-db psql -U labelstudio labelstudio < backup.sql`
+
+### Supabase 管理（standalone）
+
+本分支 Supabase 管理流程採用 standalone stack，不依賴 v1.1.0 cutover 指令。
+
+```bash
+cp .env.supabase.example .env.supabase
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+make supabase-logs SUPABASE_STANDALONE_ENV=.env.supabase
+```
 
 ### Start ML backends (GPU)
 

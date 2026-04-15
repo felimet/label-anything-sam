@@ -52,7 +52,29 @@ make health
 
 ---
 
-## 任務 3：快速事故排查（高頻）
+## 任務 3：啟用 Supabase 管理（standalone）
+
+### 目標
+在不改動核心 Label Studio stack 的前提下，啟用 Supabase 管理介面。
+
+### 步驟
+```bash
+cp .env.supabase.example .env.supabase
+make supabase-up SUPABASE_STANDALONE_ENV=.env.supabase
+```
+
+### 驗證
+- `make supabase-logs SUPABASE_STANDALONE_ENV=.env.supabase` 可看到 `studio` 與 `meta` 正常啟動
+- `make health` 通過
+- 可正常進入 Supabase Studio 管理頁
+
+### 注意
+- `.env.supabase` 僅供 Supabase 管理 stack 使用，不混入核心 `.env`
+- 若調整 Supabase 對外路由，請同步更新 Cloudflare Tunnel 設定
+
+---
+
+## 任務 4：快速事故排查（高頻）
 
 ### 症狀 A：ML 後端 401 Unauthorized
 - 檢查 `.env.ml` 的 `LABEL_STUDIO_API_KEY` 是否為 Legacy Token
@@ -74,7 +96,7 @@ make health
 
 ---
 
-## 任務 4：備份與還原演練
+## 任務 5：備份與還原演練
 
 ### 目標
 建立可驗證的資料保全流程。
@@ -97,7 +119,7 @@ tar -czf minio-data-$(date +%Y%m%d).tar.gz ./minio-data/
 
 ---
 
-## 任務 5：服務回滾
+## 任務 6：服務回滾
 
 ### 目標
 當升級造成中斷時，快速回到可用版本。
