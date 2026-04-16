@@ -42,8 +42,8 @@
 |-----------|--------|---------|------|
 | `label-studio` | `example.com` | `http://nginx:80` | - |
 | `minio-api` | `example.com` | `http://minio:9000` | 不建議對外開放，若開放可加 CF Access 規則 |
-| `minio-console` | `example.com` | `http://minio:9001` | - |
-| `minio-admin` | `example.com` | `http://minio:9002` | - |
+| `minio` | `example.com` | `http://minio:9001` | - |
+| `minio-console` | `example.com` | `http://minio:9002` | - |
 | `supabase-studio` | `example.com` | `http://supabase-studio:3000` | 建議加 CF Access 規則 |
 | `supabase-api` | `example.com` | `http://kong:8000` | - |
 | `supabase-meta` | `example.com` | `http://supabase-meta:8080` | 非常不建議對外開放 |

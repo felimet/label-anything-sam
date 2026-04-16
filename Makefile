@@ -11,7 +11,7 @@
 		supabase-up supabase-down supabase-logs \
 		supabase-standalone-up supabase-standalone-down supabase-standalone-logs \
 		supabase-sample-up supabase-sample-down supabase-sample-logs \
-		check-core-env check-supabase-standalone-env check-supabase-sample-env check-tools-env check-ls-supavisor-user-format \
+		check-core-env check-supabase-standalone-env check-supabase-sample-env check-tools-env check-ls-supavisor-user-format check-postgrest-schema-exposure \
 	tools-up tools-down tools-logs \
         init-minio health create-admin reset-password \
         push
@@ -63,6 +63,9 @@ check-tools-env: check-core-env
 
 check-ls-supavisor-user-format: check-supabase-standalone-env
 	@bash scripts/validate-supavisor-user.sh "$(SUPABASE_STANDALONE_ENV)"
+
+check-postgrest-schema-exposure: check-supabase-standalone-env
+	@bash scripts/validate-postgrest-security.sh "$(SUPABASE_STANDALONE_ENV)"
 
 ml-up:
 	$(ML_COMPOSE) up -d
@@ -119,7 +122,7 @@ test-sam21-video:
 	$(ML_COMPOSE) exec sam21-video-backend python -m pytest tests/ --tb=short -v
 
 # ─── Supabase Management (default: standalone) ─────────────
-supabase-up: check-supabase-standalone-env
+supabase-up: check-supabase-standalone-env check-postgrest-schema-exposure
 	$(SUPABASE_STANDALONE_COMPOSE) up -d
 
 supabase-down: check-supabase-standalone-env

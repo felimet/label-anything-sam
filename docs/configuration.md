@@ -63,15 +63,17 @@
 | `MINIO_ROOT_PASSWORD` | — | 管理員密碼（≥8 字元） |
 | `MINIO_BUCKET` | `default-bucket` | 儲存桶名稱（逗號分隔可列多個，例如 `default-bucket,test`）；所列 bucket 均由 `make init-minio` 自動建立，service account 亦同時取得所有 bucket 的存取權 |
 | `MINIO_EXTERNAL_HOST` | `minio-api.example.com` | 對外公開網域；嵌入 Presigned URL |
+| `MINIO_API_CORS_ALLOW_ORIGIN` | `https://label-studio.example.com` | MinIO 允許的 CORS 來源（可逗號分隔多來源）；生產環境避免 `*` |
+| `MINIO_ANONYMOUS_DOWNLOAD` | `false` | `make init-minio` 是否將 bucket 設為匿名下載；高安全性建議維持 `false` |
 | `MINIO_LS_ACCESS_ID` | `openssl rand -hex 10` | Label Studio 專用 access key（最小權限，限 `MINIO_BUCKET` 所列的所有 bucket）。由 `minio-init` 建立；**設定 LS Cloud Storage 時使用此帳號，不要用 root** |
 | `MINIO_LS_SECRET_KEY` | `openssl rand -hex 20` | 對應 secret key（≥8 字元） |
 | `MINIO_BUCKET_QUOTA_GB` | `200` | Bucket 容量上限（GiB）。**留空停用** |
 
-> **CORS**：MinIO 開源版已移除 S3 `PutBucketCors` API。CORS 改由 docker-compose.yml 的 `MINIO_API_CORS_ALLOW_ORIGIN=*` 環境變數控制，無需在 `make init-minio` 中設定。
+> **CORS**：MinIO 開源版已移除 S3 `PutBucketCors` API。CORS 改由 docker-compose.yml 的 `MINIO_API_CORS_ALLOW_ORIGIN` 環境變數控制。建議只填必要來源（例如 Label Studio 網域），不要使用 `*`。
 
 > **重要：** `MINIO_EXTERNAL_HOST` 必須可從瀏覽器端解析。MinIO 用此值產生 Presigned URL，Label Studio 內部請求仍走 `http://minio:9000`。
 
-> **服務帳號安全**：`MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` 應僅用於 Admin UI 管理，不應填入 Label Studio Cloud Storage 設定。Label Studio 連線 MinIO 請使用 `MINIO_LS_ACCESS_ID`/`MINIO_LS_SECRET_KEY`，此帳號只有 `MINIO_BUCKET` 的 Get/Put/Delete/List 權限，root 帳密不會因 LS 被入侵而外洩。
+> **服務帳號安全**：`MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` 應僅用於 Admin UI 管理，不應填入 Label Studio Cloud Storage 設定。Label Studio 連線 MinIO 請使用 `MINIO_LS_ACCESS_ID`/`MINIO_LS_SECRET_KEY`，此帳號僅限 `MINIO_BUCKET` 範圍，並包含 multipart 上傳必要權限（Get/Put/Delete/List + multipart actions）。
 
 ### 取得 Access Key 的兩種方式
 
@@ -84,6 +86,8 @@ make init-minio
 ```
 
 `minio-init` 會自動建立對應使用者並套用 bucket-scoped policy。完成後直接在 LS Cloud Storage 填入這組 key。
+
+預設會把 bucket 設為 **private**（`MINIO_ANONYMOUS_DOWNLOAD=false`）。若你確定要公開讀取，才設定 `MINIO_ANONYMOUS_DOWNLOAD=true` 後重跑 `make init-minio`。
 
 **方式 B（推薦） — Admin UI（手動）**
 
@@ -379,7 +383,7 @@ Label Studio 讀取的 env var 是 `CSRF_TRUSTED_ORIGINS`（**非** `DJANGO_CSRF
 | `SUPABASE_STORAGE_S3_ENDPOINT` | MinIO endpoint（預設 `http://minio:9000`） |
 | `SUPABASE_STORAGE_S3_PROTOCOL` | `http` 或 `https` |
 | `SUPABASE_STORAGE_S3_FORCE_PATH_STYLE` | MinIO 建議 `true` |
-| `SUPABASE_STORAGE_REGION` | S3 region 標記值 |
+| `SUPABASE_STORAGE_REGION` | S3 request 簽章使用的 region（本專案 MinIO 建議 `us-east-1`） |
 | `SUPABASE_STORAGE_TENANT_ID` | Storage tenant id（預設 `label-studio`） |
 | `SUPABASE_STORAGE_FILE_SIZE_LIMIT` | 單檔上限（bytes） |
 | `SUPABASE_STORAGE_ENABLE_IMAGE_TRANSFORMATION` | 是否啟用影像轉換 |

@@ -72,7 +72,7 @@ services:
       - MINIO_BROWSER_REDIRECT_URL=https://${MINIO_CONSOLE_HOST:-minio-console.example.com}
       # CORS — allow browser uploads via presigned URLs.
       # S3 PutBucketCors API was removed from MinIO open source; use server-level config.
-      - MINIO_API_CORS_ALLOW_ORIGIN=*
+      - MINIO_API_CORS_ALLOW_ORIGIN=${MINIO_API_CORS_ALLOW_ORIGIN:-https://label-studio.example.com}
       # KMS master key for SSE-S3 bucket encryption (no external KES required).
       # Format: <key-name>:<base64-encoded-32-byte-key>
       # Generate: printf 'minio-sse-key:'; openssl rand -base64 32
@@ -104,6 +104,9 @@ services:
       # Set in .env; leave empty to skip service account provisioning (root credentials will be used).
       - MINIO_LS_ACCESS_ID=${MINIO_LS_ACCESS_ID:-}
       - MINIO_LS_SECRET_KEY=${MINIO_LS_SECRET_KEY:-}
+      # Optional: allow anonymous download policy on buckets created by minio-init.
+      # Recommended default is false (private buckets).
+      - MINIO_ANONYMOUS_DOWNLOAD=${MINIO_ANONYMOUS_DOWNLOAD:-false}
       # Optional bucket quota in GiB. Leave empty to disable.
       - MINIO_BUCKET_QUOTA_GB=${MINIO_BUCKET_QUOTA_GB:-}
     volumes:

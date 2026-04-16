@@ -151,6 +151,7 @@ docker compose -f docker-compose.supabase.yml config -q
 
 - ML 後端必須使用 **Legacy Token**，不可使用 Personal Access Token。
 - Label Studio 連 S3 請用 `MINIO_LS_ACCESS_ID` / `MINIO_LS_SECRET_KEY`，不要使用 root 帳密。
+- MinIO Console（`minio-console.*`）登入請使用管理者帳號（root 或 `consoleAdmin`），不要使用 `MINIO_LS_ACCESS_ID`；該最小權限帳號僅供 S3 API，誤用在 Console 可能出現 `/api/v1/session` 500。
 - 首次部署完成後，請立即輪換 MinIO service account 密碼。
 - 變更 `.env` 後請用 `down` + `up` 重建容器，不要只做 `restart`。
 
