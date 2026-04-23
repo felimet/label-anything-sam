@@ -19,11 +19,11 @@ English version: [README.md](README.md)
 > [!NOTE]
 > 版本使用建議：
 >
-> - `main` 與 `v1.1.2` 已包含所有 SAM3 修正與強化：
+> - `main` 與 `v1.1.3` 已包含所有 SAM3 修正與強化：
 >   影像 + 影片原生 point embedding、遮罩選擇模式（`adaptive`/`top1`/`topk`/`threshold`/`all`）、
 >   執行期門檻與選擇模式 UI 覆蓋、雙向影片追蹤、多物件 track 合併、
 >   純文字 / 混合用途雙提示欄位。
-> - **若不使用 Supabase、希望 Label Studio 使用原生 PostgreSQL，請使用 `v1.0.2`（基於 Supabase 導入前基線的 hotfix 線）。**
+> - **若不使用 Supabase、希望 Label Studio 使用原生 PostgreSQL，請使用 `v1.0.3`（基於 Supabase 導入前基線的 hotfix 線）。**
 > - 取得版本可用以下方式：
 >   1. 用 git checkout（本機開發建議）
 >   2. 到對應 Release 下載 `Source code (zip)`
@@ -31,12 +31,12 @@ English version: [README.md](README.md)
 >
 > ```bash
 > git fetch --tags
-> git checkout tags/v1.1.2 -b local-main-v1.1.2
+> git checkout tags/v1.1.3 -b local-main-v1.1.3
 > # 或
-> git checkout tags/v1.0.2 -b local-v1-native-pg
+> git checkout tags/v1.0.3 -b local-v1-native-pg
 > ```
 >
-> 在 `v1.0.2` 中，Label Studio 資料會儲存在原生 PostgreSQL（`pg-db`），不需要 `.env.supabase` 與 `make supabase-up`。
+> 在 `v1.0.3` 中，Label Studio 資料會儲存在原生 PostgreSQL（`pg-db`），不需要 `.env.supabase` 與 `make supabase-up`。
 
 ## 快速開始
 
