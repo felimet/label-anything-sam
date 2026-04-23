@@ -188,7 +188,7 @@ batch-annotate: check-core-env
 	    $(if $(DRY_RUN),--dry-run,)
 
 batch-server:
-	uvicorn scripts.batch_server:app --host 0.0.0.0 --port 8085
+	$(CORE_COMPOSE) up -d --build batch-server
 
 # ─── Git ─────────────────────────────────────────────────────
 push:
