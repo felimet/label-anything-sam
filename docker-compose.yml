@@ -211,8 +211,10 @@ services:
     depends_on:
       label-studio:
         condition: service_healthy
+    env_file:
+      - path: .env.ml
+        required: false
     environment:
-      - LABEL_STUDIO_API_KEY=${LABEL_STUDIO_API_KEY}
       - LABEL_STUDIO_URL=http://label-studio:8080
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8085/health')\""]

@@ -1,217 +1,218 @@
-# Batch Annotation Guide
+# 批次標注指南
 
-Use `scripts/batch_annotate.py` (or the Web UI at port 8085) to run
-SAM3/SAM2.1 inference on an entire Label Studio project without opening each
-task manually.
+使用 `scripts/batch_annotate.py`（或 port 8085 的 Web UI）對整個 Label Studio 專案執行
+SAM3/SAM2.1 推論，無需逐一手動開啟任務。
 
 ---
 
-## Prerequisites
+## 前置需求
 
-| Requirement | Check |
+| 需求 | 確認方式 |
 |---|---|
-| ML backend running | `curl http://localhost:9090/health` |
-| Label Studio running | `curl http://localhost:8080/health` |
-| `LABEL_STUDIO_API_KEY` set | `echo $LABEL_STUDIO_API_KEY` |
-| Project labeling config has `<BrushLabels>` | Label Studio UI → Settings → Labeling |
+| ML 後端已啟動 | `curl http://localhost:9090/health` |
+| Label Studio 已啟動 | `curl http://localhost:8080/health` |
+| 已設定 `LABEL_STUDIO_API_KEY` | `echo $LABEL_STUDIO_API_KEY` |
+| 專案標注設定含 `<BrushLabels>` | Label Studio UI → Settings → Labeling |
 
 ---
 
-## Quick Start
+## 快速入門
 
 ### CLI
 
 ```bash
-# Dry run — list tasks without annotating
+# 演習模式 — 列出任務但不執行標注
 python scripts/batch_annotate.py --project-id 1 --backend sam3 --dry-run
 
-# Annotate all tasks
+# 標注所有任務
 python scripts/batch_annotate.py --project-id 1 --backend sam3
 
-# Makefile shortcut
+# Makefile 捷徑
 make batch-annotate PROJECT_ID=1
 ```
 
-### Web UI (no terminal required)
+### Web UI（無需終端機）
 
-Start the companion server:
+batch-server 隨 `make up` 一起啟動；也可以單獨重建：
 
 ```bash
-uvicorn scripts.batch_server:app --host 0.0.0.0 --port 8085
-# or
 make batch-server
 ```
 
-Then open `http://<your-server>:8085` in a browser and fill in the form.
+在瀏覽器開啟 `http://<your-server>:8085` 並填寫表單即可提交批次任務。
 
 ---
 
-## CLI Reference
+## CLI 參數說明
 
-| Flag | Default | Description |
+| 旗標 | 預設值 | 說明 |
 |---|---|---|
-| `--project-id INT` | (required) | Label Studio project ID |
-| `--backend sam3\|sam21` | `sam3` | ML backend type |
-| `--backend-url URL` | `$ML_BACKEND_URL` or `http://localhost:9090` | ML backend endpoint |
-| `--ls-url URL` | `$LABEL_STUDIO_URL` or `http://localhost:8080` | Label Studio endpoint |
-| `--dry-run` | off | List tasks without calling ML backend |
-| `--force` | off | Write predictions even on tasks with human annotations |
-| `--confirm-force` | off | Required second flag when using `--force` |
-| `--concurrency N` | `1` | Parallel HTTP requests |
-| `--max-tasks INT` | (all) | Limit number of tasks processed |
-| `--resume` | off | Continue from last successful task |
-| `--resume-file PATH` | `scripts/.batch_resume.json` | Resume state file path |
-| `--confidence FLOAT` | `0.5` | SAM3 confidence threshold (SAM3 only) |
-| `--sam21-mode grid` | off | Enable SAM2.1 Grid mode (EXPERIMENTAL) |
-| `--grid-n INT` | `3` | SAM2.1 grid edge length (NxN points) |
+| `--project-id INT` | （必填）| Label Studio 專案 ID |
+| `--backend sam3\|sam21` | `sam3` | ML 後端類型 |
+| `--backend-url URL` | `$ML_BACKEND_URL` 或 `http://localhost:9090` | ML 後端端點 |
+| `--ls-url URL` | `$LABEL_STUDIO_URL` 或 `http://localhost:8080` | Label Studio 端點 |
+| `--dry-run` | 關閉 | 列出任務但不呼叫 ML 後端 |
+| `--force` | 關閉 | 對已有人工標注的任務也寫入預測 |
+| `--confirm-force` | 關閉 | 使用 `--force` 時必須同時加上此旗標 |
+| `--concurrency N` | `1` | 並行 HTTP 請求數 |
+| `--max-tasks INT` | （全部）| 限制處理任務數 |
+| `--resume` | 關閉 | 從上次成功的任務繼續 |
+| `--resume-file PATH` | `scripts/.batch_resume.json` | 續接狀態檔路徑 |
+| `--confidence FLOAT` | `0.5` | SAM3 信心閾值（僅 SAM3 有效）|
+| `--sam21-mode grid` | 關閉 | 啟用 SAM2.1 格點模式（實驗性）|
+| `--grid-n INT` | `3` | SAM2.1 格點邊長（N×N 個點）|
+| `--basic-auth-user STR` | 空 | ML 後端 HTTP Basic Auth 帳號 |
+| `--basic-auth-pass STR` | 空 | ML 後端 HTTP Basic Auth 密碼 |
 
 ---
 
-## Authentication
+## 認證
 
-API key is read **exclusively** from the `LABEL_STUDIO_API_KEY` environment
-variable. It is never logged, never passed as a CLI argument.
+API 金鑰**僅**從 `LABEL_STUDIO_API_KEY` 環境變數讀取。金鑰不會被記錄，也不會作為
+CLI 引數傳遞。
 
 ```bash
-export LABEL_STUDIO_API_KEY=your-token-here
+export LABEL_STUDIO_API_KEY=your-legacy-token-here
 python scripts/batch_annotate.py --project-id 1
 ```
+
+> **⚠ 必須使用 Legacy Token，不得使用 Personal Access Token（JWT Bearer）。**
+> CLI 以 `Authorization: Token <key>` 呼叫 Label Studio API，僅 Legacy Token
+> 符合此格式。PAT 格式不同，會導致 401。
+
+Docker Compose 環境下，`LABEL_STUDIO_API_KEY` 從 `.env.ml` 自動注入 batch-server
+容器（`env_file: .env.ml required: false`），無需在 `.env` 重複設定。
 
 ---
 
 ## SAM3 vs SAM2.1
 
-| Feature | SAM3 (`--backend sam3`) | SAM2.1 (`--backend sam21`) |
+| 特性 | SAM3（`--backend sam3`）| SAM2.1（`--backend sam21`）|
 |---|---|---|
-| Context type | Text prompt (label names) | Grid of keypoints (geometry) |
-| Multi-object | Yes (one mask per label) | No (1 mask per image, argmax) |
-| Accuracy | Higher | Lower (geometry heuristic) |
-| Activation | Default | `--sam21-mode grid` required |
-| Recommended | Production | Single-dominant-object scenes |
+| 上下文類型 | 文字提示（label 名稱）| 格點幾何（grid keypoints）|
+| 多物件 | 支援（每個 label 一個遮罩）| 不支援（每張影像一個遮罩，取最高分）|
+| 準確度 | 較高 | 較低（幾何啟發式）|
+| 啟用方式 | 預設 | 須加 `--sam21-mode grid` |
+| 建議用途 | 正式環境 | 單一主體場景 |
 
-> **SAM2.1 is EXPERIMENTAL.** It returns exactly **one mask per image**
-> (the highest-scoring point). It is not suitable for multi-object or empty scenes.
+> **SAM2.1 為實驗性功能。** 每張影像只回傳**一個遮罩**（最高分點），
+> 不適用於多物件或空景場景。
 
 ---
 
-## Concurrency
+## 並行處理
 
 ```bash
-# Run 4 parallel requests (requires SAM3_IMAGE_WORKERS=4 in .env.ml)
+# 4 個並行請求（需在 .env.ml 設定 SAM3_IMAGE_WORKERS=4）
 python scripts/batch_annotate.py --project-id 1 --concurrency 4
 ```
 
-Backend `WORKERS` controls actual parallelism. If `WORKERS=1` (the default),
-setting `--concurrency > 1` queues requests without throughput gain.
+後端 `WORKERS` 決定真正的並行數量。若 `WORKERS=1`（預設），
+設定 `--concurrency > 1` 只會讓請求排隊，不會提升吞吐量。
 
-Check your `.env.ml`:
+確認 `.env.ml`：
+
 ```
 SAM3_IMAGE_WORKERS=4
 ```
 
 ---
 
-## Task Status Classification
+## 任務狀態說明
 
-| Status | Meaning |
+| 狀態 | 含義 |
 |---|---|
-| `success` | Prediction written to Label Studio |
-| `skip_human` | Task has human annotations; skipped (use `--force` to override) |
-| `skip_race` | Annotation appeared between list and write (TOCTOU window) |
-| `zero_match` | ML backend returned no predictions (check label names / confidence) |
-| `fail` | HTTP error or network failure |
+| `success` | 預測已寫入 Label Studio |
+| `skip_human` | 任務已有人工標注，略過（加 `--force` 可覆寫）|
+| `skip_race` | 在列表與寫入之間出現標注（TOCTOU 視窗）|
+| `zero_match` | ML 後端回傳零個預測（確認 label 名稱與信心閾值）|
+| `fail` | HTTP 錯誤或網路異常 |
 
-> **`--force` safety**: When `--force --confirm-force` is used, predictions are
-> written alongside existing human annotations. **Human annotations are never
-> deleted.** This is a parallel write, not an overwrite.
+> **`--force` 安全說明**：`--force --confirm-force` 同時使用時，預測與現有人工標注**並存**，
+> **不會刪除任何人工標注**。
 
 ---
 
-## Exit Codes
+## 結束代碼
 
-| Code | Meaning |
+| 代碼 | 含義 |
 |---|---|
-| `0` | All tasks succeeded (zero_match counts as success) |
-| `1` | Partial failures |
-| `2` | All tasks failed |
-| `3` | Configuration error (missing args, API key not set) |
-| `4` | Authentication failure (invalid API key) |
+| `0` | 全部成功（`zero_match` 計為成功）|
+| `1` | 部分失敗 |
+| `2` | 全部失敗 |
+| `3` | 設定錯誤（缺少引數、API 金鑰未設定）|
+| `4` | 認證失敗（API 金鑰無效）|
 
 ---
 
-## Resume
-
-If a batch is interrupted:
+## 續接中斷的批次
 
 ```bash
-# Resume from last successfully processed task
+# 從上次成功處繼續
 python scripts/batch_annotate.py --project-id 1 --resume
 ```
 
-State is stored in `scripts/.batch_resume.json` (excluded from git commits
-but retained locally across sessions).
+狀態儲存於 `scripts/.batch_resume.json`（已排除在 git 外，本地跨 session 保留）。
 
 ---
 
-## Web UI (batch_server)
+## Web UI（batch_server）
 
-The companion FastAPI server exposes a browser form at `http://<host>:8085`:
+已整合至 `docker-compose.yml`，與主服務一起啟動。
+瀏覽器表單位於 `http://<host>:8085`。
+
+**API 端點：**
 
 ```
-GET  /                      → HTML form
-POST /batch                 → Start batch, returns {"job_id": "..."}
-GET  /batch/{job_id}/status → Poll progress and log
+GET  /                      → HTML 表單
+POST /batch                 → 啟動批次，回傳 {"job_id": "..."}
+GET  /batch/{job_id}/status → 輪詢進度與日誌
 GET  /health                → {"status": "ok"}
 ```
 
-**Authentication** (optional): Set `BATCH_SERVER_API_KEY` environment variable.
-All requests then require an `X-API-Key: <key>` header.
+**Web UI 表單欄位說明：**
 
-**Docker Compose integration** (optional — append to existing
-`docker-compose.override.yml`):
+| 欄位 | 說明 |
+|---|---|
+| Project ID | Label Studio 專案 ID（必填）|
+| ML Backend URL | ML 後端端點（預設：`http://sam3-image-backend:9090`）|
+| Backend | SAM3（建議）或 SAM2.1（實驗性）|
+| SAM2.1 Mode | SAM2.1 專用；選 `grid`（3×3 格點）|
+| Confidence | SAM3 信心閾值（預設 0.5）|
+| Max tasks | 限制處理任務數（留空代表全部）|
+| Dry run | 演習模式，不實際標注 |
+| Force | 對已有人工標注的任務也寫入預測 |
+| Confirm-force | 使用 Force 時必須同時勾選 |
+| ML Basic Auth User | ML 後端 HTTP Basic Auth 帳號（選填）|
+| ML Basic Auth Pass | ML 後端 HTTP Basic Auth 密碼（選填）|
 
-```yaml
-services:
-  batch-server:
-    build:
-      context: .
-      dockerfile: scripts/Dockerfile.batch-server
-    ports:
-      - "8085:8085"
-    environment:
-      - LABEL_STUDIO_URL=http://label-studio:8080
-      - ML_BACKEND_URL=http://sam3-image:9090
-    env_file: [.env]
-```
+ML Basic Auth 憑證對應 `.env.ml` 中的 `BASIC_AUTH_USER` / `BASIC_AUTH_PASS`。
 
 ---
 
-## Troubleshooting
+## 常見問題排查
 
-### All tasks return `zero_match`
+### 所有任務都回傳 `zero_match`
 
-1. Check label names match `<Label value="...">` in the labeling config exactly
-2. Lower `--confidence` (e.g. `--confidence 0.3`)
-3. Verify the ML backend is running: `curl http://localhost:9090/health`
-4. Run with a single task: `--max-tasks 1 --dry-run` then without `--dry-run`
+1. 確認 label 名稱與標注設定中 `<Label value="...">` 完全相符（大小寫敏感）
+2. 降低 `--confidence`（例如 `--confidence 0.3`）
+3. 確認 ML 後端正在運行：`curl http://localhost:9090/health`
+4. 先用單任務測試：`--max-tasks 1 --dry-run`，再去掉 `--dry-run`
 
-### `skip_race` on every task
+### 每個任務都是 `skip_race`
 
-Another process or user is annotating the same project concurrently.
-**Only one batch CLI process should run per project at a time.**
+另一個行程或使用者正在對同一專案並行標注。**每個專案同時只應有一個批次 CLI 行程執行。**
 
 ### Connection refused
 
-- `--ls-url` or `--backend-url` points to wrong host/port
-- Ensure both services are running before starting the batch
+- `--ls-url` 或 `--backend-url` 指向錯誤的主機/埠號
+- 確認兩個服務都在啟動批次前已正常運行
 
 ---
 
-## Warnings
+## 注意事項
 
-- **Do not run multiple batch processes against the same project simultaneously.**
-  `delete_cli_predictions()` uses `model_version` scoping, but concurrent deletes
-  can race and remove each other's freshly written predictions.
-- **Do not run on a project where users are actively annotating** unless using
-  `--force`. The TOCTOU window (between list-tasks and write-prediction) is small
-  but non-zero. Draft annotations (not yet submitted) are not protected.
+- **不要對同一專案同時執行多個批次行程。** `delete_cli_predictions()` 使用
+  `model_version` 範圍化，但並行刪除可能競爭並刪除對方剛寫入的預測。
+- **若使用者正在主動標注，不要執行批次**（除非使用 `--force`）。從列出任務到寫入
+  預測之間存在微小的 TOCTOU 視窗。草稿標注（尚未提交）不受保護。
