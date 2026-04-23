@@ -19,11 +19,11 @@ As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSi
 > [!NOTE]
 > Version guidance:
 >
-> - `main` and release `v1.1.2` include all SAM3 fixes and enhancements:
+> - `main` and release `v1.1.3` include all SAM3 fixes and enhancements:
 >   native point embeddings (image + video), mask selection modes (`adaptive`/`top1`/`topk`/`threshold`/`all`),
 >   runtime threshold and selection-mode UI overrides, bidirectional video tracking, multi-object track merging,
 >   and dual text-prompt fields (pure vs mixed-use).
-> - **If you prefer native PostgreSQL mode (no Supabase), use release `v1.0.2` (hotfix line based on pre-Supabase baseline).**
+> - **If you prefer native PostgreSQL mode (no Supabase), use release `v1.0.3` (hotfix line based on pre-Supabase baseline).**
 > - You can get each line in any of these ways:
 >   1. Git checkout (recommended for local dev)
 >   2. Download `Source code (zip)` from the corresponding Release
@@ -31,12 +31,12 @@ As of 2026-04, the upstream [Label Studio ML backend](https://github.com/HumanSi
 >
 > ```bash
 > git fetch --tags
-> git checkout tags/v1.1.2 -b local-main-v1.1.2
+> git checkout tags/v1.1.3 -b local-main-v1.1.3
 > # or
-> git checkout tags/v1.0.2 -b local-v1-native-pg
+> git checkout tags/v1.0.3 -b local-v1-native-pg
 > ```
 >
-> In `v1.0.2`, Label Studio data is stored in native PostgreSQL (`pg-db`) and does not require `.env.supabase` or `make supabase-up`.
+> In `v1.0.3`, Label Studio data is stored in native PostgreSQL (`pg-db`) and does not require `.env.supabase` or `make supabase-up`.
 
 ## Quick Start
 
