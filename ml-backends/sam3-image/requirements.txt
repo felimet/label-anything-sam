@@ -16,3 +16,4 @@ pycocotools>=2.0.6     # transitive dep of sam3.train.data.coco_json_loaders (ne
 
 # SAM3 Agent requirements
 openai>=1.0.0          # required for SAM3 Agent LLM interaction
+matplotlib>=3.7.0      # required by sam3.agent.helpers.visualizer (mask visualisation)
